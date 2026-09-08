@@ -48,6 +48,8 @@ export class Rooms {
       // Host departure ends the programme. No automatic source takeover.
       for (const member of room.members.values()) { member.roomId = null; this.notify(member, { type: 'room', room: null, reason: 'host_left' }); }
       room.members.clear();
+      this.rooms.delete(room.id);
+      return;
     }
     if (!room.members.size) room.emptySince = Date.now();
     this.broadcast(room);

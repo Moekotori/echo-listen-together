@@ -44,6 +44,7 @@ test('password, membership, host-only audio, epoch validation and single-use inv
   assert.equal(outsider.events.filter(Buffer.isBuffer).length, 0);
   assert.equal(a.events.filter(Buffer.isBuffer).length, 0);
   await a.request('leave'); await tick(); assert(b.events.some(x => x.reason === 'host_left'));
+  assert.equal((await outsider.request('rooms')).result.length, 0);
 });
 test('room/server caps are enforced and disconnect resumes the same identity', async t => {
   const { connect } = await fixture(t, { maxUsers: 3, maxRooms: 1, maxRoomUsers: 2 });
