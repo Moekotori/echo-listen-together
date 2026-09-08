@@ -1,0 +1,29 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    expose: ["8787"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file: .env
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+volumes:
+  caddy_data:
+  caddy_config:
