@@ -49,13 +49,18 @@ export function createListenServer(config) {
           if (input.protocol !== 1) throw new Error('protocol_mismatch');
           if (config.serverPassword && !secretEqual(input.password, config.serverPassword)) throw new Error('server_password_required');
           const resumed = typeof input.resumeToken === 'string' ? peers.get(input.resumeToken) : null;
-          if (resumed && !resumed.ws && Date.now() - resumed.disconnectedAt < config.reconnectMs) peer = resumed;
+          const replacedSocket = resumed?.ws;
+          // TLS proxies can keep the old upstream socket open briefly after
+          // a client disconnects. Possession of the resume token authorizes
+          // replacing that socket without losing the room or consuming capacity.
+          if (resumed && (resumed.ws || Date.now() - resumed.disconnectedAt < config.reconnectMs)) peer = resumed;
           else {
             if (peers.size >= config.maxUsers) throw new Error('server_full');
             peer = { id: token(), resumeToken: token(), name: text(input.name, 48), roomId: null, ws: null, disconnectedAt: 0, audioWindow: 0, audioPackets: 0, audioBytes: 0 };
             peers.set(peer.resumeToken, peer);
           }
           peer.ws = ws; clearTimeout(helloTimer);
+          if (replacedSocket && replacedSocket !== ws) replacedSocket.terminate();
           reply({ result: { protocol: 1, peerId: peer.id, resumeToken: peer.resumeToken, name: config.name,
             limits: { maxUsers: config.maxUsers, maxRooms: config.maxRooms, maxRoomUsers: config.maxRoomUsers } } });
           if (peer.roomId) { const room = rooms.rooms.get(peer.roomId); if (room) rooms.broadcast(room); }

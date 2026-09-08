@@ -65,3 +65,15 @@ test('concurrent password joins cannot exceed capacity', async t => {
   const replies = await Promise.all([b, c].map(p => p.request('join', { roomId: room.id, password: 'secret' })));
   assert.equal(replies.filter(x => x.result).length, 1); assert.equal(replies.filter(x => x.error === 'room_full').length, 1);
 });
+
+test('valid resume token replaces a stale live socket without consuming another user slot', async t => {
+  const { connect } = await fixture(t, { maxUsers: 2 });
+  const a = await connect(), b = await connect();
+  const room = (await a.request('create', { name: 'Resume takeover', maxUsers: 2 })).result;
+  await b.request('join', { roomId: room.id });
+  const resumed = await connect({ resumeToken: b.hello.result.resumeToken });
+  assert.equal(resumed.hello.result?.peerId, b.hello.result.peerId);
+  await tick();
+  assert(resumed.events.some(event => event.room?.id === room.id && event.room.count === 2));
+  assert.equal(b.ws.readyState, WebSocket.CLOSED);
+});
