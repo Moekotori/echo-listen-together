@@ -1,0 +1,8 @@
+# Use with compose.yaml when DOMAIN is a public IP address.
+services:
+  gateway:
+    image: caddy:2.11.4-alpine
+    volumes:
+      - ./deploy/Caddyfile.ip:/etc/caddy/Caddyfile:ro
+    mem_limit: 256m
+    pids_limit: 128

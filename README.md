@@ -4,7 +4,7 @@
 
 ## 部署
 
-准备 Docker Compose、Node.js 22+、一条解析到服务器的域名，放行 TCP 80/443。
+准备 Docker Compose、Node.js 22+、公网 IPv4 或一条解析到服务器的域名，放行 TCP 80/443。
 
 ```sh
 git clone https://github.com/Moekotori/echo-listen-together.git
@@ -12,11 +12,11 @@ cd echo-listen-together
 npm run setup
 ```
 
-向导生成 `.env`、启动容器、通过 Caddy 自动配置 HTTPS，并打印 ECHO 连接地址及连接码。不会覆盖已有配置。公网健康检查失败会明确报错，不能把容器启动视为可连接。
+向导生成 `.env`、启动容器、通过 Caddy 自动配置 HTTPS，并打印 ECHO 连接地址及连接码。公网 IPv4 自动使用 `compose.ip.yaml`，由 Caddy 2.11.4 申请并自动续期 Let’s Encrypt 短期 IP 证书；不使用自签名证书。不会覆盖已有配置。公网健康检查失败会明确报错，不能把容器启动视为可连接。
 
 无需 Node 的手动方式：复制 `.env.example` 为 `.env`，设置 DOMAIN、PUBLIC_URL 和随机 ADMIN_TOKEN，然后运行 `docker compose up -d --build`。更新：`git pull --ff-only` 后重新运行该命令。服务端重启会清空临时房间。
 
-本地开发 / 可信局域网：`npm ci && npm start`，连接 `ws://localhost:8787`。公网使用 wss；明文 ws 无法保护房间密码与邀请凭证。只有公网 IP 时先配置有效 TLS 入口和 PUBLIC_URL，默认向导不会关闭证书验证。
+本地开发 / 可信局域网：`npm ci && npm start`，连接 `ws://localhost:8787`。公网使用 wss；明文 ws 无法保护房间密码与邀请凭证。只有公网 IPv4 也可以运行部署向导。手动部署时设置 `DOMAIN=你的IP`、`PUBLIC_URL=wss://你的IP` 和 `COMPOSE_FILE=compose.yaml:compose.ip.yaml`，保留 Caddy 数据卷与自动续期。短期证书约 6 天，不能只申请一次后停止续期。
 
 ## 容量与内存
 
@@ -35,3 +35,11 @@ SERVER_PASSWORD 可选，用于限制连接服务器。房间密码经随机盐 
 `npm test` 覆盖真实 WebSocket 房间权限、容量、音频转发和重连。GitHub CI 同时检查容器构建。生产线路、200 人容量和 Steam 双账号体验需分别验收。
 
 协议见 [PROTOCOL.md](PROTOCOL.md)。源代码的公开可见性不自动授予再分发许可；项目许可证由维护者决定。第三方依赖见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 部署后测试
+
+```sh
+node scripts/smoke-remote.mjs wss://你的服务器地址
+```
+
+检查可信 TLS、健康接口、密码、人数上限、私密房间与音频原样转发。测试会创建一个临时私密房间并在结束时清理。有服务器访问密码时通过 `SERVER_PASSWORD` 环境变量提供，不放进参数或 URL。短时 200 客户端本机转发检查：`node scripts/smoke-capacity.mjs`，它不等于公网三网或长期容量验收。

@@ -1,0 +1,14 @@
+{
+  # IP clients normally omit TLS SNI; choose the managed IP certificate.
+  default_sni {$DOMAIN}
+}
+
+# Public IP certificates require Caddy with ACME IP support and automatic renewal.
+{$DOMAIN} {
+  tls {
+    issuer acme https://acme-v02.api.letsencrypt.org/directory {
+      profile shortlived
+    }
+  }
+  reverse_proxy relay:8787
+}
