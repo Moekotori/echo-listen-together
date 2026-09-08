@@ -63,7 +63,14 @@ export function createListenServer(config) {
           if (replacedSocket && replacedSocket !== ws) replacedSocket.terminate();
           reply({ result: { protocol: 1, peerId: peer.id, resumeToken: peer.resumeToken, name: config.name,
             limits: { maxUsers: config.maxUsers, maxRooms: config.maxRooms, maxRoomUsers: config.maxRoomUsers } } });
-          if (peer.roomId) { const room = rooms.rooms.get(peer.roomId); if (room) rooms.broadcast(room); }
+          if (peer.roomId) {
+            const room = rooms.rooms.get(peer.roomId);
+            if (room) {
+              // The reconnected host must explicitly authorize a fresh stream.
+              if (peer === resumed && room.hostId === peer.id) room.streamEpoch = 0;
+              rooms.broadcast(room);
+            }
+          }
           return;
         }
         if (!peer || peer.ws !== ws) throw new Error('hello_required');

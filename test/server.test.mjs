@@ -77,3 +77,14 @@ test('valid resume token replaces a stale live socket without consuming another 
   assert(resumed.events.some(event => event.room?.id === room.id && event.room.count === 2));
   assert.equal(b.ws.readyState, WebSocket.CLOSED);
 });
+
+test('host takeover clears the stale advertised stream until sharing restarts', async t => {
+  const { connect } = await fixture(t);
+  const host = await connect();
+  const room = (await host.request('create', { name: 'Host resume', maxUsers: 2 })).result;
+  await host.request('stream', { epoch: 99 });
+  const resumed = await connect({ resumeToken: host.hello.result.resumeToken });
+  await tick();
+  assert.equal(resumed.hello.result.peerId, host.hello.result.peerId);
+  assert(resumed.events.some(event => event.room?.id === room.id && event.room.streamEpoch === 0));
+});
