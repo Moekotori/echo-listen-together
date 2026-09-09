@@ -1,17 +1,18 @@
-import { randomUUID } from 'node:crypto';
 import { roomForPeer } from './room-features.mjs';
+import { randomUUID } from 'node:crypto';
 import { token, text, hashPassword, checkPassword } from './security.mjs';
 export class Rooms {
   constructor(config, notify, changed = () => {}) { this.changed = changed; this.config = config; this.notify = notify; this.rooms = new Map(); this.creating = 0; }
   publicRoom(room, details = false) {
     const base = { id: room.id, name: room.name, locked: Boolean(room.password), private: room.private, count: room.members.size, maxUsers: room.maxUsers };
-    return details ? { ...base, hostId: room.hostId, streamEpoch: room.streamEpoch, title: room.title,
+    return details ? { ...base, hostId: room.hostId, streamEpoch: room.streamEpoch, title: room.title, track: room.track ?? null,
       members: [...room.members.values()].map(p => ({ id: p.id, name: p.name, ...(p.steamId ? { steamId: p.steamId } : {}), online: Boolean(p.ws) })) } : base;
   }
   list() { return [...this.rooms.values()].filter(r => !r.private).map(r => this.publicRoom(r)); }
   broadcast(room) {
-    const snapshot = this.publicRoom(room, true);
-    for (const member of room.members.values()) this.notify(member, { type: 'room', room: roomForPeer(snapshot, room, member) });
+    // One transient snapshot per update; never retain member lists between broadcasts.
+    const message = { type: 'room', room: this.publicRoom(room, true) };
+    for (const member of room.members.values()) this.notify(member, { type: 'room', room: roomForPeer(message.room, room, member) });
   }
   async create(peer, input) {
     if (peer.roomId) throw new Error('already_in_room');
@@ -76,6 +77,7 @@ export class Rooms {
   stream(peer, input) {
     const room = this.owned(peer);
     if (!Number.isSafeInteger(input.epoch) || input.epoch < 0 || input.epoch > Number.MAX_SAFE_INTEGER - 2) throw new Error('invalid_epoch');
+    if (room.streamEpoch !== input.epoch || !input.epoch) { room.track = null; room.artworkAt = undefined; }
     room.multiQuality = input.multiQuality === true && input.epoch > 0;
     room.streamEpoch = input.epoch; room.title = text(input.title, 160, true);
     this.broadcast(room); return true;

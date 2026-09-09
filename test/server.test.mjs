@@ -4,8 +4,8 @@ import { once } from 'node:events';
 import WebSocket from 'ws';
 import { readConfig } from '../src/config.mjs';
 import { createListenServer } from '../src/server.mjs';
-async function fixture(t, overrides = {}) {
-  const server = createListenServer({ ...readConfig({ PORT: '0', HOST: '127.0.0.1' }), ...overrides });
+async function fixture(t, overrides = {}, timing = {}) {
+  const server = createListenServer({ ...readConfig({ PORT: '0', HOST: '127.0.0.1' }), ...overrides }, timing);
   const address = await server.listen();
   t.after(() => server.close());
   const connect = async (hello = {}) => {
@@ -25,50 +25,79 @@ async function fixture(t, overrides = {}) {
   return { server, connect };
 }
 const tick = () => new Promise(resolve => setTimeout(resolve, 40));
-test('chat is room scoped, identity is authoritative, oversized and fast messages are rejected', async t => {
-  const { connect } = await fixture(t);
-  const host = await connect({ name: 'Host', steamId: '76561198000000001' }), guest = await connect(), outside = await connect();
-  assert.equal((await outside.request('chat', { text: 'No room' })).error, 'room_required');
-  const room = (await host.request('create', { name: 'Chat', maxUsers: 3 })).result;
-  await guest.request('join', { roomId: room.id });
-  assert.equal(guest.events.filter(e => e.type === 'room').at(-1).room.members.find(m => m.name === 'Host').steamId, '76561198000000001');
-  assert.equal(host.hello.result.capabilities.chat, true);
-  assert.equal((await host.request('chat', { text: 'x'.repeat(501) })).error, 'invalid_chat');
-  assert.equal((await host.request('chat', { text: '  hello <script>  ', name: 'fake', senderId: 'fake' })).result, true);
-  await tick();
-  const message = guest.events.find(e => e.type === 'chat').message;
-  assert.equal(message.name, 'Host'); assert.equal(message.senderId, host.hello.result.peerId);
-  assert.equal(message.text, 'hello <script>'); assert.equal(message.roomId, room.id);
-  assert.equal(outside.events.filter(e => e.type === 'chat').length, 0);
-  assert.equal((await host.request('chat', { text: 'again' })).error, 'chat_rate_limit');
-  await guest.request('leave');
-  assert.equal((await guest.request('chat', { text: 'left' })).error, 'room_required');
-});
-test('each listener receives only their rendition and legacy hosts fall back to standard', async t => {
-  const { connect } = await fixture(t);
-  const host = await connect(), standard = await connect(), high = await connect();
-  const room = (await host.request('create', { name: 'Quality', maxUsers: 3 })).result;
-  await standard.request('join', { roomId: room.id }); await high.request('join', { roomId: room.id });
-  assert.equal((await high.request('quality', { value: 999 })).error, 'invalid_quality');
-  await high.request('quality', { value: 320 });
-  await host.request('stream', { epoch: 100, multiQuality: true });
-  for (const epoch of [100, 101, 102, 103]) host.ws.send(packet(epoch));
-  await tick();
-  assert.deepEqual(standard.events.filter(Buffer.isBuffer).map(p => Number(p.readBigUInt64LE(8))), [100]);
-  assert.deepEqual(high.events.filter(Buffer.isBuffer).map(p => Number(p.readBigUInt64LE(8))), [102]);
-  await high.request('quality', { value: 256 });
-  host.ws.send(packet(102)); host.ws.send(packet(101)); await tick();
-  assert.equal(Number(high.events.filter(Buffer.isBuffer).at(-1).readBigUInt64LE(8)), 101);
-  assert.equal(high.events.filter(e => e.type === 'room').at(-1).room.quality, 256);
-  await host.request('stream', { epoch: 200 }); host.ws.send(packet(200)); await tick();
-  const fallback = high.events.filter(e => e.type === 'room').at(-1).room;
-  assert.equal(fallback.quality, 128); assert.equal(fallback.preferredQuality, 256);
-  assert.equal(Number(high.events.filter(Buffer.isBuffer).at(-1).readBigUInt64LE(8)), 200);
-});
 function packet(epoch) {
   const p = Buffer.alloc(39); p.write('ELTA'); p[4] = 1; p.writeUInt16LE(36, 6); p.writeBigUInt64LE(BigInt(epoch), 8);
   p.writeUInt32LE(48000, 28); p.writeUInt16LE(3, 32); p[34] = 2; p[35] = 20; p.set([0xf8, 0xff, 0xfe], 36); return p;
 }
+
+test('real sockets retain membership through a catch-up burst and temporary receiver congestion', async t => {
+  const { server, connect } = await fixture(t);
+  const host = await connect(), guest = await connect();
+  const room = (await host.request('create', { name: 'Congestion regression', maxUsers: 2 })).result;
+  await guest.request('join', { roomId: room.id });
+  await host.request('stream', { epoch: 777 });
+  for (let i = 0; i < 150; i++) host.ws.send(packet(777));
+  await tick();
+  assert.equal(host.ws.readyState, WebSocket.OPEN);
+  assert.equal(guest.events.filter(Buffer.isBuffer).length, 150);
+  const receiver = server.peers.get(guest.hello.result.resumeToken).ws;
+  Object.defineProperty(receiver, 'bufferedAmount', { configurable: true, get: () => 20000 });
+  host.ws.send(packet(777)); await tick();
+  assert.equal(guest.ws.readyState, WebSocket.OPEN);
+  assert.equal(guest.events.filter(Buffer.isBuffer).length, 150);
+  delete receiver.bufferedAmount;
+  host.ws.send(packet(777)); await tick();
+  assert.equal(guest.events.filter(Buffer.isBuffer).length, 151);
+  assert.equal((await guest.request('rooms')).result[0].count, 2);
+});
+
+test('a guest resumes its room after the former twenty-second retention window', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  const { connect } = await fixture(t);
+  const host = await connect(), guest = await connect();
+  const room = (await host.request('create', { name: 'Resume regression', maxUsers: 2 })).result;
+  await guest.request('join', { roomId: room.id });
+  guest.ws.close(); await once(guest.ws, 'close'); await tick();
+  t.mock.timers.tick(25000);
+  const resumed = await connect({ resumeToken: guest.hello.result.resumeToken });
+  await tick();
+  assert.equal(resumed.hello.result.peerId, guest.hello.result.peerId);
+  assert(resumed.events.some(event => event.room?.id === room.id && event.room.count === 2));
+});
+
+test('heartbeat uses elapsed time, tolerates a missed pong and ignores wall-clock jumps', async t => {
+  let now = 0;
+  const { server, connect } = await fixture(t, {}, { now: () => now });
+  const guest = await connect();
+  const ws = server.peers.get(guest.hello.result.resumeToken).ws;
+  t.mock.method(Date, 'now', () => 9999999999999);
+  assert.equal(ws.isAlive(), true);
+  now = 20000; assert.equal(ws.isAlive(), true);
+  ws.emit('pong');
+  now = 54000; assert.equal(ws.isAlive(), true);
+  now = 55000; assert.equal(ws.isAlive(), false);
+});
+
+test('valid host audio renews liveness, invalid and unauthorized packets do not', async t => {
+  let now = 0;
+  const { server, connect } = await fixture(t, {}, { now: () => now });
+  const host = await connect(), guest = await connect();
+  const room = (await host.request('create', { name: 'Liveness', maxUsers: 2 })).result;
+  await guest.request('join', { roomId: room.id });
+  await host.request('stream', { epoch: 123 });
+  const hostSocket = server.peers.get(host.hello.result.resumeToken).ws;
+  const guestSocket = server.peers.get(guest.hello.result.resumeToken).ws;
+  now = 34000;
+  host.ws.send(packet(123)); guest.ws.send(packet(123)); await tick();
+  now = 36000;
+  assert.equal(hostSocket.isAlive(), true);
+  assert.equal(guestSocket.isAlive(), false);
+  now = 68000;
+  host.ws.send(packet(999)); await tick();
+  now = 69000;
+  assert.equal(hostSocket.isAlive(), false);
+});
+
 test('password, membership, host-only audio, epoch validation and single-use invitation', async t => {
   const { connect } = await fixture(t); const a = await connect(), b = await connect(), outsider = await connect();
   const room = (await a.request('create', { name: 'Private', password: 'secret', private: true, maxUsers: 3 })).result;
@@ -141,3 +170,108 @@ test('coalesces public room changes for lobby clients without exposing private r
   await new Promise(resolve => setTimeout(resolve, 500));
   assert.equal(watcher.events.filter(event => event.type === 'rooms-changed').length, 0);
 });
+
+test('Steam identity is bounded display metadata visible only to room members', async t => {
+  const { connect } = await fixture(t);
+  const host = await connect({ steamId: '76561198000000001' });
+  const guest = await connect({ steamId: 'invalid' });
+  const room = (await host.request('create', { name: 'Identity test', maxUsers: 3 })).result;
+  assert.equal(room.members[0].steamId, '76561198000000001');
+  const listing = (await guest.request('rooms')).result;
+  assert.equal(listing[0].members, undefined);
+  const joined = (await guest.request('join', { roomId: room.id })).result;
+  assert.equal(joined.members[0].steamId, '76561198000000001');
+  assert.equal(joined.members[1].steamId, undefined);
+});
+
+test('room broadcasts share only the current snapshot and later updates are fresh', async t => {
+  const { server, connect } = await fixture(t);
+  const host = await connect(), guest = await connect();
+  const created = (await host.request('create', { name: 'Snapshot', maxUsers: 2 })).result;
+  await guest.request('join', { roomId: created.id });
+  const room = server.rooms.rooms.get(created.id);
+  const messages = [];
+  const notify = server.rooms.notify;
+  server.rooms.notify = (peer, message) => { messages.push(message); notify(peer, message); };
+  server.rooms.broadcast(room);
+  assert.equal(messages.length, 2);
+  assert.notEqual(messages[0], messages[1]);
+  assert.equal(messages[0].room.members, messages[1].room.members);
+  assert.equal(messages[0].room.track, messages[1].room.track);
+  const previous = messages[0];
+  room.title = 'Updated';
+  messages.length = 0;
+  server.rooms.broadcast(room);
+  assert.notEqual(messages[0], previous);
+  assert.equal(previous.room.title, '');
+  assert.equal(messages[0].room.title, 'Updated');
+  server.rooms.notify = notify;
+});
+
+test('artwork belongs to the current host epoch and is available to late joiners only inside the room', async t => {
+ const {connect}=await fixture(t);const host=await connect(),guest=await connect(),late=await connect();
+ assert.equal(host.hello.result.capabilities.trackArtwork,true);
+ assert.equal(host.hello.result.capabilities.trackMetadata,undefined);
+ const room=(await host.request('create',{name:'Artwork',maxUsers:3})).result;
+ await guest.request('join',{roomId:room.id});await host.request('stream',{epoch:123,title:'Song'});
+ const b=Buffer.alloc(30);b.write('RIFF');b.write('WEBPVP8 ',8);b.set([0x9d,1,0x2a],23);b.writeUInt16LE(96,26);b.writeUInt16LE(96,28);
+ const track={title:'Song',artist:'Artist',album:'Album',cover:b.toString('base64'),lyrics:{lines:[{text:'must not forward'}]}};
+ assert.equal((await guest.request('metadata',{epoch:123,track})).error,'host_required');
+ assert.equal((await host.request('metadata',{epoch:122,track})).error,'stream_changed');
+ assert.equal((await host.request('metadata',{epoch:123,track})).result,true);
+ const joined=(await late.request('join',{roomId:room.id})).result;
+ assert.equal(joined.track.cover,track.cover);assert.equal(joined.track.lyrics,null);
+ assert.equal((await guest.request('rooms')).result[0].track,undefined);
+ host.ws.send(packet(123));await tick();assert.equal(guest.events.filter(Buffer.isBuffer).length,1);
+ await host.request('stream',{epoch:124,title:'New song'});await tick();
+ assert.equal(guest.events.filter(e=>e.type==='room').at(-1).room.track,null);
+ assert.equal((await host.request('metadata',{epoch:123,track})).error,'stream_changed');
+ await host.request('metadata',{epoch:124,track});
+ const resumed=await connect({resumeToken:host.hello.result.resumeToken});await tick();
+ assert.equal(resumed.events.filter(e=>e.type==='room').at(-1).room.track,null);
+});
+
+test('chat is room scoped, identity is authoritative, oversized and fast messages are rejected', async t => {
+  const { connect } = await fixture(t);
+  const host = await connect({ name: 'Host', steamId: '76561198000000001' }), guest = await connect(), outside = await connect();
+  assert.equal((await outside.request('chat', { text: 'No room' })).error, 'room_required');
+  const room = (await host.request('create', { name: 'Chat', maxUsers: 3 })).result;
+  await guest.request('join', { roomId: room.id });
+  assert.equal(guest.events.filter(e => e.type === 'room').at(-1).room.members.find(m => m.name === 'Host').steamId, '76561198000000001');
+  assert.equal(host.hello.result.capabilities.chat, true);
+  assert.equal((await host.request('chat', { text: 'x'.repeat(501) })).error, 'invalid_chat');
+  assert.equal((await host.request('chat', { text: '  hello <script>  ', name: 'fake', senderId: 'fake' })).result, true);
+  await tick();
+  const message = guest.events.find(e => e.type === 'chat').message;
+  assert.equal(message.name, 'Host'); assert.equal(message.senderId, host.hello.result.peerId);
+  assert.equal(message.text, 'hello <script>'); assert.equal(message.roomId, room.id);
+  assert.equal(outside.events.filter(e => e.type === 'chat').length, 0);
+  assert.equal((await host.request('chat', { text: 'again' })).error, 'chat_rate_limit');
+  await guest.request('leave');
+  assert.equal((await guest.request('chat', { text: 'left' })).error, 'room_required');
+});
+test('each listener receives only their rendition and legacy hosts fall back to standard', async t => {
+  const { connect } = await fixture(t);
+  const host = await connect(), standard = await connect(), high = await connect();
+  const room = (await host.request('create', { name: 'Quality', maxUsers: 3 })).result;
+  await standard.request('join', { roomId: room.id }); await high.request('join', { roomId: room.id });
+  assert.equal((await high.request('quality', { value: 999 })).error, 'invalid_quality');
+  await high.request('quality', { value: 320 });
+  await host.request('stream', { epoch: 100, multiQuality: true });
+  for (const epoch of [100, 101, 102, 103]) host.ws.send(qualityPacket(epoch));
+  await tick();
+  assert.deepEqual(standard.events.filter(Buffer.isBuffer).map(p => Number(p.readBigUInt64LE(8))), [100]);
+  assert.deepEqual(high.events.filter(Buffer.isBuffer).map(p => Number(p.readBigUInt64LE(8))), [102]);
+  await high.request('quality', { value: 256 });
+  host.ws.send(qualityPacket(102)); host.ws.send(qualityPacket(101)); await tick();
+  assert.equal(Number(high.events.filter(Buffer.isBuffer).at(-1).readBigUInt64LE(8)), 101);
+  assert.equal(high.events.filter(e => e.type === 'room').at(-1).room.quality, 256);
+  await host.request('stream', { epoch: 200 }); host.ws.send(qualityPacket(200)); await tick();
+  const fallback = high.events.filter(e => e.type === 'room').at(-1).room;
+  assert.equal(fallback.quality, 128); assert.equal(fallback.preferredQuality, 256);
+  assert.equal(Number(high.events.filter(Buffer.isBuffer).at(-1).readBigUInt64LE(8)), 200);
+});
+function qualityPacket(epoch) {
+  const p = Buffer.alloc(39); p.write('ELTA'); p[4] = 1; p.writeUInt16LE(36, 6); p.writeBigUInt64LE(BigInt(epoch), 8);
+  p.writeUInt32LE(48000, 28); p.writeUInt16LE(3, 32); p[34] = 2; p[35] = 20; p.set([0xf8, 0xff, 0xfe], 36); return p;
+}

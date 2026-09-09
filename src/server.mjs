@@ -2,9 +2,10 @@ import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { token, text, secretEqual } from './security.mjs';
 import { Rooms } from './rooms.mjs';
-import { relayAudio } from './relay.mjs';
+import { updateArtwork } from './artwork.mjs';
 import { selectQuality, sendChat } from './room-features.mjs';
-export function createListenServer(config) {
+import { relayAudio } from './relay.mjs';
+export function createListenServer(config, { now = () => performance.now() } = {}) {
   const peers = new Map(), connections = new Set();
   const send = (peer, message) => {
     if (peer.ws?.readyState !== 1) return;
@@ -28,7 +29,7 @@ export function createListenServer(config) {
     }
     res.statusCode = 404; res.end('{"error":"not_found"}');
   });
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 8192, perMessageDeflate: false });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 16384, perMessageDeflate: false });
   http.on('upgrade', (req, socket, head) => {
     if (req.url !== '/v1/socket' || connections.size >= config.maxUsers + 32 || req.headers.origin) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
@@ -36,12 +37,16 @@ export function createListenServer(config) {
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws));
   });
   wss.on('connection', ws => {
-    connections.add(ws); let peer = null, busy = false, count = 0, windowAt = Date.now(); let alive = true;
+    connections.add(ws); let peer = null, busy = false, count = 0, windowAt = Date.now(); let lastSeen = now();
     const helloTimer = setTimeout(() => { if (!peer) ws.close(1008, 'hello_timeout'); }, 5000);
-    ws.on('pong', () => { alive = true; }); ws.on('error', () => {});
-    ws.isAlive = () => { if (!alive) return false; alive = false; return true; };
+    const seen = () => { lastSeen = now(); };
+    ws.on('pong', seen); ws.on('ping', seen); ws.on('error', () => {});
+    ws.isAlive = () => now() - lastSeen < 35000;
     ws.on('message', async (raw, binary) => {
-      if (binary) { if (peer?.ws === ws) relayAudio(peer, raw, rooms); return; }
+      if (binary) {
+        if (peer?.ws === ws && relayAudio(peer, raw, rooms)) seen();
+        return;
+      }
       if (Date.now() - windowAt > 10000) { windowAt = Date.now(); count = 0; }
       if (++count > 40) { ws.close(1008, 'control_rate_limit'); return; }
       let message;
@@ -53,6 +58,7 @@ export function createListenServer(config) {
       busy = true;
       try {
         const input = message.data || {};
+        if (message.type !== 'metadata' && raw.length > 8192) throw new Error('invalid_request');
         if (message.type === 'hello') {
           if (peer) throw new Error('already_connected');
           if (input.protocol !== 1) throw new Error('protocol_mismatch');
@@ -65,21 +71,19 @@ export function createListenServer(config) {
           if (resumed && (resumed.ws || Date.now() - resumed.disconnectedAt < config.reconnectMs)) peer = resumed;
           else {
             if (peers.size >= config.maxUsers) throw new Error('server_full');
-            peer = { id: token(), resumeToken: token(), name: text(input.name, 48),
-              steamId: typeof input.steamId === 'string' && /^7656119[0-9]{10}$/.test(input.steamId) ? input.steamId : undefined,
-              roomId: null, ws: null, disconnectedAt: 0, audioWindow: 0, audioPackets: 0, audioBytes: 0 };
+            peer = { id: token(), resumeToken: token(), name: text(input.name, 48), steamId: typeof input.steamId === 'string' && /^7656119[0-9]{10}$/.test(input.steamId) ? input.steamId : undefined, roomId: null, ws: null, disconnectedAt: 0, audioWindow: 0, audioPackets: 0, audioBytes: 0 };
             peers.set(peer.resumeToken, peer);
           }
-          peer.ws = ws; clearTimeout(helloTimer);
+          peer.ws = ws; seen(); clearTimeout(helloTimer);
           if (replacedSocket && replacedSocket !== ws) replacedSocket.terminate();
           reply({ result: { protocol: 1, peerId: peer.id, resumeToken: peer.resumeToken, name: config.name,
-            capabilities: { chat: true, audioQualities: true },
+            capabilities: { trackArtwork: true, chat: true, audioQualities: true },
             limits: { maxUsers: config.maxUsers, maxRooms: config.maxRooms, maxRoomUsers: config.maxRoomUsers } } });
           if (peer.roomId) {
             const room = rooms.rooms.get(peer.roomId);
             if (room) {
               // The reconnected host must explicitly authorize a fresh stream.
-              if (peer === resumed && room.hostId === peer.id) room.streamEpoch = 0;
+              if (peer === resumed && room.hostId === peer.id) { room.streamEpoch = 0; room.track = null; }
               rooms.broadcast(room);
             }
           }
@@ -97,8 +101,10 @@ export function createListenServer(config) {
           case 'invite': result = rooms.invite(peer); break;
           case 'revokeInvites': rooms.owned(peer).invitations.clear(); result = true; break;
           case 'stream': result = rooms.stream(peer, input); break;
+          case 'metadata': result = updateArtwork(rooms.owned(peer), input, () => rooms.broadcast(rooms.owned(peer))); break;
           default: throw new Error('unknown_request');
         }
+        seen();
         reply({ result });
       } catch (error) { reply({ error: /^[a-z_]+$/.test(error.message) ? error.message : 'invalid_request' }); }
       finally { busy = false; }
@@ -108,7 +114,7 @@ export function createListenServer(config) {
       if (peer?.ws === ws) {
         peer.ws = null; peer.disconnectedAt = Date.now();
         const room = rooms.rooms.get(peer.roomId);
-        if (room) { if (room.hostId === peer.id) room.streamEpoch = 0; rooms.broadcast(room); }
+        if (room) { if (room.hostId === peer.id) { room.streamEpoch = 0; room.track = null; } rooms.broadcast(room); }
       }
     });
   });
@@ -116,7 +122,7 @@ export function createListenServer(config) {
     for (const [key, peer] of peers) if (!peer.ws && Date.now() - peer.disconnectedAt >= config.reconnectMs) { rooms.leave(peer); peers.delete(key); }
     rooms.sweep();
   }, 1000);
-  const ping = setInterval(() => { for (const ws of connections) { if (!ws.isAlive()) ws.terminate(); else ws.ping(); } }, 10000);
+  const ping = setInterval(() => { for (const ws of connections) { if (ws.readyState !== 1) continue; if (!ws.isAlive()) ws.terminate(); else ws.ping(); } }, 10000);
   return { http, rooms, peers,
     listen: () => new Promise(resolve => http.listen(config.port, config.host, () => resolve(http.address()))),
     close: async () => { if (roomChangeTimer) clearTimeout(roomChangeTimer); clearInterval(sweep); clearInterval(ping); for (const ws of connections) ws.terminate(); wss.close(); await new Promise(resolve => http.close(resolve)); },
