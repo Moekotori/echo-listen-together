@@ -15,15 +15,15 @@ try {
   console.log('配置已写入 .env（管理员凭据仅保存在该文件）。请确认防火墙放行 TCP 80/443。');
   const result = spawnSync('docker', ['compose', 'up', '-d', '--build'], { stdio: 'inherit' });
   if (result.status !== 0) throw new Error('Docker 启动未成功。安装 Docker Compose 后重试 docker compose up -d --build。');
-  let healthy = false;
+  // The running container is the source of truth for limits and password configuration.
+  let checked;
   for (let i = 0; i < 12; i++) {
-    try { const res = await fetch(`https://${domain}/health`, { signal: AbortSignal.timeout(4000) }); healthy = res.ok && (await res.json()).protocol === 1; } catch {}
-    if (healthy) break;
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    checked = spawnSync('docker', ['compose', 'exec', '-T', 'relay', 'npm', 'run', 'info'], { encoding: 'utf8' });
+    if (checked.status === 0) break;
+    if (i < 11) await new Promise(resolve => setTimeout(resolve, 3000));
   }
-  console.log(`ECHO 连接地址：wss://${domain}`);
-  console.log(`连接码：echo-listen:${Buffer.from(JSON.stringify({ server: `wss://${domain}` })).toString('base64url')}`);
-  if (!healthy) throw new Error('容器已启动，但公网 HTTPS 检查未通过。请检查 DNS、防火墙和 docker compose logs gateway，尚不能视为部署完成。');
-  console.log('公网 HTTPS 健康检查通过。');
+  if (checked.stdout) console.log(checked.stdout);
+  if (checked.status !== 0) throw new Error('容器已启动，但连接检查未通过。排查后运行 docker compose exec relay npm run info 重新检查。');
+
 } catch (error) { console.error(error.message); process.exitCode = 1; }
 finally { rl.close(); }

@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/index.mjs",
     "test": "node --test test/*.test.mjs",
-    "setup": "node scripts/setup.mjs"
+    "setup": "node scripts/setup.mjs",
+    "info": "node src/info.mjs"
   },
   "dependencies": {
     "ws": "8.21.3"
