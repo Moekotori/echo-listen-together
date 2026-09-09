@@ -10,7 +10,15 @@ export function createListenServer(config) {
     if (peer.ws.bufferedAmount > 65536) { peer.ws.close(1013, 'slow_receiver'); return; }
     peer.ws.send(JSON.stringify(message));
   };
-  const rooms = new Rooms(config, send);
+  let roomChangeTimer = null;
+  const notifyRoomsChanged = () => {
+    if (roomChangeTimer) return;
+    roomChangeTimer = setTimeout(() => {
+      roomChangeTimer = null;
+      for (const peer of peers.values()) if (!peer.roomId) send(peer, { type: 'rooms-changed' });
+    }, 400);
+  };
+  const rooms = new Rooms(config, send, notifyRoomsChanged);
   const http = createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json'); res.setHeader('Cache-Control', 'no-store');
     if (req.url === '/health') { res.end(JSON.stringify({ ok: true, protocol: 1 })); return; }
@@ -105,6 +113,6 @@ export function createListenServer(config) {
   const ping = setInterval(() => { for (const ws of connections) { if (!ws.isAlive()) ws.terminate(); else ws.ping(); } }, 10000);
   return { http, rooms, peers,
     listen: () => new Promise(resolve => http.listen(config.port, config.host, () => resolve(http.address()))),
-    close: async () => { clearInterval(sweep); clearInterval(ping); for (const ws of connections) ws.terminate(); wss.close(); await new Promise(resolve => http.close(resolve)); },
+    close: async () => { if (roomChangeTimer) clearTimeout(roomChangeTimer); clearInterval(sweep); clearInterval(ping); for (const ws of connections) ws.terminate(); wss.close(); await new Promise(resolve => http.close(resolve)); },
   };
 }

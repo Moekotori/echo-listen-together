@@ -88,3 +88,16 @@ test('host takeover clears the stale advertised stream until sharing restarts', 
   assert.equal(resumed.hello.result.peerId, host.hello.result.peerId);
   assert(resumed.events.some(event => event.room?.id === room.id && event.room.streamEpoch === 0));
 });
+
+test('coalesces public room changes for lobby clients without exposing private rooms', async t => {
+  const { connect } = await fixture(t);
+  const watcher = await connect(), host = await connect();
+  await host.request('create', { name: 'Public room', maxUsers: 2 });
+  await host.request('leave');
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.equal(watcher.events.filter(event => event.type === 'rooms-changed').length, 1);
+  watcher.events.length = 0;
+  await host.request('create', { name: 'Secret room', private: true, maxUsers: 2 });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.equal(watcher.events.filter(event => event.type === 'rooms-changed').length, 0);
+});

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { token, text, hashPassword, checkPassword } from './security.mjs';
 export class Rooms {
-  constructor(config, notify) { this.config = config; this.notify = notify; this.rooms = new Map(); this.creating = 0; }
+  constructor(config, notify, changed = () => {}) { this.changed = changed; this.config = config; this.notify = notify; this.rooms = new Map(); this.creating = 0; }
   publicRoom(room, details = false) {
     const base = { id: room.id, name: room.name, locked: Boolean(room.password), private: room.private, count: room.members.size, maxUsers: room.maxUsers };
     return details ? { ...base, hostId: room.hostId, streamEpoch: room.streamEpoch, title: room.title,
@@ -21,7 +21,7 @@ export class Rooms {
       if (!peer.ws || peer.roomId) throw new Error('session_changed');
       const room = { id: randomUUID(), name, maxUsers, private: input.private === true, password: passwordHash,
         hostId: peer.id, members: new Map([[peer.id, peer]]), invitations: new Map(), streamEpoch: 0, title: '', emptySince: 0 };
-      this.rooms.set(room.id, room); peer.roomId = room.id; this.broadcast(room); return this.publicRoom(room, true);
+      this.rooms.set(room.id, room); peer.roomId = room.id; if (!room.private) this.changed(); this.broadcast(room); return this.publicRoom(room, true);
     } finally { this.creating--; }
   }
   async join(peer, input) {
@@ -37,12 +37,14 @@ export class Rooms {
     if (invited) room.invitations.delete(input.invitation);
     room.members.set(peer.id, peer); peer.roomId = room.id; room.emptySince = 0;
     if (!room.hostId) room.hostId = peer.id;
+    if (!room.private) this.changed();
     this.broadcast(room); return this.publicRoom(room, true);
   }
   leave(peer) {
     const room = this.rooms.get(peer.roomId); peer.roomId = null;
     if (!room) return;
     room.members.delete(peer.id);
+    if (!room.private) this.changed();
     if (room.hostId === peer.id) {
       room.hostId = null; room.streamEpoch = 0; room.title = ''; room.invitations.clear();
       // Host departure ends the programme. No automatic source takeover.
@@ -77,7 +79,7 @@ export class Rooms {
   sweep() {
     for (const room of this.rooms.values()) {
       this.pruneInvites(room);
-      if (room.emptySince && Date.now() - room.emptySince > this.config.emptyRoomMs) this.rooms.delete(room.id);
+      if (room.emptySince && Date.now() - room.emptySince > this.config.emptyRoomMs) { this.rooms.delete(room.id); if (!room.private) this.changed(); }
     }
   }
 }
