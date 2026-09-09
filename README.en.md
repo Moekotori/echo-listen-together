@@ -9,7 +9,7 @@ You need an **ECHO desktop client** that supports Listen Together. This reposito
 ## 1. Prerequisites
 
 - A Linux server with Git, Docker Engine, and the Docker Compose plugin (`docker compose`). See the [official Docker installation guide](https://docs.docker.com/engine/install/).
-- **Node.js 22 or newer on the host** for the automatic setup wizard. No `npm install` is needed for the wizard. Use section 3 if you prefer not to install Node.
+- **No host Node.js or npm required.** The script uses Node inside Docker to generate configuration. Docker itself must already be installed.
 - A public IPv4 address, or a domain pointing to it. For example, create an A record for `listen.example.com` pointing to your server.
 - Allow inbound **TCP 80 and 443** in both your cloud security group and system firewall. These ports must be available. Do not expose the internal relay port 8787 publicly.
 - Permission to run Docker. Run the commands below in the server terminal.
@@ -20,7 +20,6 @@ Check the prerequisites:
 git --version
 docker version
 docker compose version
-node --version
 ```
 
 ## 2. One-command deployment wizard (recommended)
@@ -28,7 +27,7 @@ node --version
 ```sh
 git clone https://github.com/Moekotori/echo-listen-together.git
 cd echo-listen-together
-npm run setup
+./deploy.sh
 ```
 
 Enter your domain or public IPv4 address, such as `listen.example.com`, **without a scheme, port, or path**.
@@ -40,13 +39,13 @@ The wizard automatically:
 3. Uses Caddy to obtain and automatically renew a trusted HTTPS certificate.
 4. Checks the public endpoint and prints the connection address, connection code, password guidance, capacity limits, and management commands.
 
-The wizard and terminal report currently use Chinese. `公网健康检查：检查通过` means the public health check passed. A running container alone does not prove public connectivity. Initial certificate issuance may take time. If the check fails, troubleshoot below and rerun the information command rather than repeatedly deleting configuration and requesting certificates.
+The deployment script has bilingual prompts; the detailed information report currently uses Chinese. `公网健康检查：检查通过` means the public health check passed. A running container alone does not prove public connectivity. Initial certificate issuance may take time. If the check fails, troubleshoot below and rerun the information command rather than repeatedly deleting configuration and requesting certificates.
 
 **A domain is optional.** For public IPv4 deployment, the wizard uses Caddy 2.11.4 through `compose.ip.yaml` and a short-lived Let's Encrypt IP certificate. Keep the gateway running, ports reachable, and certificate volumes persistent for automatic renewal. Do not bypass certificate validation.
 
-If `.env` already exists, setup stops instead of overwriting configuration or credentials. Use the update procedure in section 6.
+If `.env` exists, the script reuses it and rebuilds/starts services without replacing credentials. Run during an idle period because restarts end temporary rooms. The legacy `npm run setup` remains available for hosts with Node installed.
 
-## 3. Manual Docker deployment without Node on the host
+## 3. Optional manual Docker deployment
 
 Clone and enter the repository, then copy the template. Do not overwrite an existing `.env`:
 

@@ -9,7 +9,7 @@
 ## 1. 部署前准备
 
 - 一台可以运行 Docker 的 Linux 服务器，安装 Git、Docker Engine 和 Docker Compose 插件（命令为 `docker compose`）。安装方式见 [Docker 官方文档](https://docs.docker.com/engine/install/)。
-- 使用下面的自动向导时，主机还需要 **Node.js 22 或更新版本**；不需要先运行 `npm install`。不想安装 Node 可使用第 3 节手动部署。
+- **不需要宿主机 Node.js 或 npm**。一键脚本使用 Docker 内的 Node 生成配置；Docker 本身需要预先安装。
 - 一个公网 IPv4，或已解析到此服务器的域名。例如将 `listen.example.com` 的 A 记录指向服务器 IPv4。
 - 云安全组和系统防火墙放行 **TCP 80、443**，且这两个端口未被其他服务占用。不要将内部 8787 端口开放到公网。
 - 当前账号能运行 Docker；以下命令均在服务器终端执行。
@@ -20,7 +20,6 @@
 git --version
 docker version
 docker compose version
-node --version
 ```
 
 ## 2. 一键部署（推荐）
@@ -28,7 +27,7 @@ node --version
 ```sh
 git clone https://github.com/Moekotori/echo-listen-together.git
 cd echo-listen-together
-npm run setup
+./deploy.sh
 ```
 
 输入域名或公网 IPv4，例如 `listen.example.com`，**不加 `https://`、端口或路径**。
@@ -44,9 +43,9 @@ npm run setup
 
 **只有 IP 也能部署。** 向导会使用 `compose.ip.yaml` 中的 Caddy 2.11.4 和 Let’s Encrypt 短期 IP 证书。必须保持网关运行、端口可达和数据卷持久化以便自动续期，不需要绕过证书验证。
 
-如果已有 `.env`，向导会停止以避免覆盖配置和凭据。请使用第 6 节的更新命令。
+如果已有 `.env`，脚本会复用配置并重建启动，不覆盖凭据；重启会结束临时房间，请在空闲时执行。旧的 `npm run setup` 仍可供已安装 Node 的用户使用。
 
-## 3. 不安装 Node：手动 Docker 部署
+## 3. 可选：手动 Docker 部署
 
 先克隆并进入仓库，然后复制配置；已有 `.env` 时不要覆盖：
 

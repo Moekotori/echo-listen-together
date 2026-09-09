@@ -1,17 +1,13 @@
 import { createInterface } from 'node:readline/promises';
-import { randomBytes } from 'node:crypto';
-import { writeFile, access } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
-import { isIP } from 'node:net';
+import { configure } from './configure.mjs';
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 try {
   try { await access('.env'); throw new Error('.env 已存在，请直接修改配置后运行 docker compose up -d --build；不会覆盖已有凭据。'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const domain = (await rl.question('输入公网 IPv4 或已解析到此服务器的域名（不含 https://）：')).trim().toLowerCase();
-  const ipAddress = isIP(domain) === 4;
-  if (!ipAddress && !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain)) throw new Error('请输入有效域名或公网 IPv4。局域网开发方式见 README。');
-  const admin = randomBytes(32).toString('hex');
-  await writeFile('.env', `COMPOSE_PROJECT_NAME=echo-listen\nCOMPOSE_FILE=${ipAddress ? 'compose.yaml:compose.ip.yaml' : 'compose.yaml'}\nDOMAIN=${domain}\nPUBLIC_URL=wss://${domain}\nSERVER_NAME=ECHO Listening Room\nHOST=0.0.0.0\nPORT=8787\nMAX_USERS=200\nMAX_ROOMS=30\nMAX_ROOM_USERS=10\nADMIN_TOKEN=${admin}\n`, { mode: 0o600, flag: 'wx' });
+  await configure(domain);
   console.log('配置已写入 .env（管理员凭据仅保存在该文件）。请确认防火墙放行 TCP 80/443。');
   const result = spawnSync('docker', ['compose', 'up', '-d', '--build'], { stdio: 'inherit' });
   if (result.status !== 0) throw new Error('Docker 启动未成功。安装 Docker Compose 后重试 docker compose up -d --build。');
