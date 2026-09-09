@@ -275,3 +275,16 @@ function qualityPacket(epoch) {
   const p = Buffer.alloc(39); p.write('ELTA'); p[4] = 1; p.writeUInt16LE(36, 6); p.writeBigUInt64LE(BigInt(epoch), 8);
   p.writeUInt32LE(48000, 28); p.writeUInt16LE(3, 32); p[34] = 2; p[35] = 20; p.set([0xf8, 0xff, 0xfe], 36); return p;
 }
+
+test('host defaults change actual packets while explicit listener choices remain independent', async t => {
+ const {connect}=await fixture(t);const host=await connect(),guest=await connect(),custom=await connect();
+ const room=(await host.request('create',{name:'Default quality',maxUsers:3})).result;
+ await guest.request('join',{roomId:room.id});await custom.request('join',{roomId:room.id});
+ await custom.request('quality',{value:128});await host.request('stream',{epoch:300,multiQuality:true});
+ for(const [value,offset] of [[320,2],[256,1],[128,0]]){
+  assert.equal((await host.request('quality',{value})).result,true);guest.events.length=0;custom.events.length=0;
+  for(let i=0;i<3;i++)host.ws.send(qualityPacket(300+i));await tick();
+  assert.deepEqual(guest.events.filter(Buffer.isBuffer).map(b=>Number(b.readBigUInt64LE(8))),[300+offset]);
+  assert.deepEqual(custom.events.filter(Buffer.isBuffer).map(b=>Number(b.readBigUInt64LE(8))),[300]);
+ }
+});
