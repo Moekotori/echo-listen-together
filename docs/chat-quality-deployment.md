@@ -9,3 +9,5 @@ Deployed relay only; gateway, environment and certificate volumes unchanged. Pre
 ## Host default quality follow-up
 
 The host quality command now changes the room default. Listeners without an explicit preference follow it; listeners with their own choice retain it. Public packet checks passed 320 -> 256 -> 128 defaults and independent listener selection. All 23 focused Linux container tests passed. Backup for this update: /opt/echo-listen-chat-20260909T130921Z/backup; prior image: echo-listen-relay:before-chat-20260909T130921Z.
+
+Late-join follow-up: create/join replies now use the personalized room snapshot as well as broadcasts, so a new listener immediately receives the correct rendition epoch. All 24 candidate-container tests passed. Backup: /opt/echo-listen-chat-20260909T131431Z/backup.

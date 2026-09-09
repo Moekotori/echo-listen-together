@@ -26,7 +26,7 @@ export class Rooms {
       if (!peer.ws || peer.roomId) throw new Error('session_changed');
       const room = { id: randomUUID(), name, maxUsers, private: input.private === true, password: passwordHash,
         hostId: peer.id, members: new Map([[peer.id, peer]]), invitations: new Map(), streamEpoch: 0, title: '', emptySince: 0 };
-      this.rooms.set(room.id, room); peer.roomId = room.id; if (!room.private) this.changed(); this.broadcast(room); return this.publicRoom(room, true);
+      this.rooms.set(room.id, room); peer.roomId = room.id; if (!room.private) this.changed(); this.broadcast(room); return roomForPeer(this.publicRoom(room, true), room, peer);
     } finally { this.creating--; }
   }
   async join(peer, input) {
@@ -43,7 +43,7 @@ export class Rooms {
     room.members.set(peer.id, peer); peer.roomId = room.id; room.emptySince = 0;
     if (!room.hostId) room.hostId = peer.id;
     if (!room.private) this.changed();
-    this.broadcast(room); return this.publicRoom(room, true);
+    this.broadcast(room); return roomForPeer(this.publicRoom(room, true), room, peer);
   }
   leave(peer) {
     const room = this.rooms.get(peer.roomId); peer.roomId = null;

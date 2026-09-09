@@ -288,3 +288,11 @@ test('host defaults change actual packets while explicit listener choices remain
   assert.deepEqual(custom.events.filter(Buffer.isBuffer).map(b=>Number(b.readBigUInt64LE(8))),[300]);
  }
 });
+
+test('late join response includes the selected default epoch, not the base rendition', async t => {
+ const {connect}=await fixture(t);const host=await connect(),guest=await connect();
+ const room=(await host.request('create',{name:'Late quality',maxUsers:2})).result;
+ await host.request('quality',{value:320});await host.request('stream',{epoch:400,multiQuality:true});
+ const joined=(await guest.request('join',{roomId:room.id})).result;
+ assert.equal(joined.quality,320);assert.equal(joined.streamEpoch,402);
+});
