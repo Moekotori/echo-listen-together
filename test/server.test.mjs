@@ -25,6 +25,46 @@ async function fixture(t, overrides = {}) {
   return { server, connect };
 }
 const tick = () => new Promise(resolve => setTimeout(resolve, 40));
+test('chat is room scoped, identity is authoritative, oversized and fast messages are rejected', async t => {
+  const { connect } = await fixture(t);
+  const host = await connect({ name: 'Host', steamId: '76561198000000001' }), guest = await connect(), outside = await connect();
+  assert.equal((await outside.request('chat', { text: 'No room' })).error, 'room_required');
+  const room = (await host.request('create', { name: 'Chat', maxUsers: 3 })).result;
+  await guest.request('join', { roomId: room.id });
+  assert.equal(guest.events.filter(e => e.type === 'room').at(-1).room.members.find(m => m.name === 'Host').steamId, '76561198000000001');
+  assert.equal(host.hello.result.capabilities.chat, true);
+  assert.equal((await host.request('chat', { text: 'x'.repeat(501) })).error, 'invalid_chat');
+  assert.equal((await host.request('chat', { text: '  hello <script>  ', name: 'fake', senderId: 'fake' })).result, true);
+  await tick();
+  const message = guest.events.find(e => e.type === 'chat').message;
+  assert.equal(message.name, 'Host'); assert.equal(message.senderId, host.hello.result.peerId);
+  assert.equal(message.text, 'hello <script>'); assert.equal(message.roomId, room.id);
+  assert.equal(outside.events.filter(e => e.type === 'chat').length, 0);
+  assert.equal((await host.request('chat', { text: 'again' })).error, 'chat_rate_limit');
+  await guest.request('leave');
+  assert.equal((await guest.request('chat', { text: 'left' })).error, 'room_required');
+});
+test('each listener receives only their rendition and legacy hosts fall back to standard', async t => {
+  const { connect } = await fixture(t);
+  const host = await connect(), standard = await connect(), high = await connect();
+  const room = (await host.request('create', { name: 'Quality', maxUsers: 3 })).result;
+  await standard.request('join', { roomId: room.id }); await high.request('join', { roomId: room.id });
+  assert.equal((await high.request('quality', { value: 999 })).error, 'invalid_quality');
+  await high.request('quality', { value: 320 });
+  await host.request('stream', { epoch: 100, multiQuality: true });
+  for (const epoch of [100, 101, 102, 103]) host.ws.send(packet(epoch));
+  await tick();
+  assert.deepEqual(standard.events.filter(Buffer.isBuffer).map(p => Number(p.readBigUInt64LE(8))), [100]);
+  assert.deepEqual(high.events.filter(Buffer.isBuffer).map(p => Number(p.readBigUInt64LE(8))), [102]);
+  await high.request('quality', { value: 256 });
+  host.ws.send(packet(102)); host.ws.send(packet(101)); await tick();
+  assert.equal(Number(high.events.filter(Buffer.isBuffer).at(-1).readBigUInt64LE(8)), 101);
+  assert.equal(high.events.filter(e => e.type === 'room').at(-1).room.quality, 256);
+  await host.request('stream', { epoch: 200 }); host.ws.send(packet(200)); await tick();
+  const fallback = high.events.filter(e => e.type === 'room').at(-1).room;
+  assert.equal(fallback.quality, 128); assert.equal(fallback.preferredQuality, 256);
+  assert.equal(Number(high.events.filter(Buffer.isBuffer).at(-1).readBigUInt64LE(8)), 200);
+});
 function packet(epoch) {
   const p = Buffer.alloc(39); p.write('ELTA'); p[4] = 1; p.writeUInt16LE(36, 6); p.writeBigUInt64LE(BigInt(epoch), 8);
   p.writeUInt32LE(48000, 28); p.writeUInt16LE(3, 32); p[34] = 2; p[35] = 20; p.set([0xf8, 0xff, 0xfe], 36); return p;

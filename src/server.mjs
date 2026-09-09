@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import { token, text, secretEqual } from './security.mjs';
 import { Rooms } from './rooms.mjs';
 import { relayAudio } from './relay.mjs';
+import { selectQuality, sendChat } from './room-features.mjs';
 export function createListenServer(config) {
   const peers = new Map(), connections = new Set();
   const send = (peer, message) => {
@@ -64,12 +65,15 @@ export function createListenServer(config) {
           if (resumed && (resumed.ws || Date.now() - resumed.disconnectedAt < config.reconnectMs)) peer = resumed;
           else {
             if (peers.size >= config.maxUsers) throw new Error('server_full');
-            peer = { id: token(), resumeToken: token(), name: text(input.name, 48), roomId: null, ws: null, disconnectedAt: 0, audioWindow: 0, audioPackets: 0, audioBytes: 0 };
+            peer = { id: token(), resumeToken: token(), name: text(input.name, 48),
+              steamId: typeof input.steamId === 'string' && /^7656119[0-9]{10}$/.test(input.steamId) ? input.steamId : undefined,
+              roomId: null, ws: null, disconnectedAt: 0, audioWindow: 0, audioPackets: 0, audioBytes: 0 };
             peers.set(peer.resumeToken, peer);
           }
           peer.ws = ws; clearTimeout(helloTimer);
           if (replacedSocket && replacedSocket !== ws) replacedSocket.terminate();
           reply({ result: { protocol: 1, peerId: peer.id, resumeToken: peer.resumeToken, name: config.name,
+            capabilities: { chat: true, audioQualities: true },
             limits: { maxUsers: config.maxUsers, maxRooms: config.maxRooms, maxRoomUsers: config.maxRoomUsers } } });
           if (peer.roomId) {
             const room = rooms.rooms.get(peer.roomId);
@@ -84,6 +88,8 @@ export function createListenServer(config) {
         if (!peer || peer.ws !== ws) throw new Error('hello_required');
         let result;
         switch (message.type) {
+          case 'chat': result = sendChat(rooms, peer, input); break;
+          case 'quality': result = selectQuality(rooms, peer, input); break;
           case 'rooms': result = rooms.list(); break;
           case 'create': result = await rooms.create(peer, input); break;
           case 'join': result = await rooms.join(peer, input); break;
