@@ -9,4 +9,8 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci --ignore-scripts
       - run: npm test
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python3 -m unittest discover -s scripts/listening-server-report -p 'test_*.py' -v
+        env: { PYTHONDONTWRITEBYTECODE: '1' }
       - run: docker build -t echo-listen-together:test .

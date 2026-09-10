@@ -1,14 +1,20 @@
+import { roomForPeer } from './room-features.mjs';
+import { updateProgramme } from './programme-state.mjs';
 import { randomUUID } from 'node:crypto';
 import { token, text, hashPassword, checkPassword } from './security.mjs';
 export class Rooms {
   constructor(config, notify, changed = () => {}) { this.changed = changed; this.config = config; this.notify = notify; this.rooms = new Map(); this.creating = 0; }
   publicRoom(room, details = false) {
     const base = { id: room.id, name: room.name, locked: Boolean(room.password), private: room.private, count: room.members.size, maxUsers: room.maxUsers };
-    return details ? { ...base, hostId: room.hostId, streamEpoch: room.streamEpoch, title: room.title,
-      members: [...room.members.values()].map(p => ({ id: p.id, name: p.name, online: Boolean(p.ws) })) } : base;
+    return details ? { ...base, hostId: room.hostId, streamEpoch: room.streamEpoch, programmeState: room.programmeState ?? (room.streamEpoch ? 'playing' : 'stopped'), title: room.title, track: room.track ?? null,
+      members: [...room.members.values()].map(p => ({ id: p.id, name: p.name, ...(p.steamId ? { steamId: p.steamId } : {}), online: Boolean(p.ws) })) } : base;
   }
   list() { return [...this.rooms.values()].filter(r => !r.private).map(r => this.publicRoom(r)); }
-  broadcast(room) { for (const member of room.members.values()) this.notify(member, { type: 'room', room: this.publicRoom(room, true) }); }
+  broadcast(room) {
+    // One transient snapshot per update; never retain member lists between broadcasts.
+    const message = { type: 'room', room: this.publicRoom(room, true) };
+    for (const member of room.members.values()) this.notify(member, { type: 'room', room: roomForPeer(message.room, room, member) });
+  }
   async create(peer, input) {
     if (peer.roomId) throw new Error('already_in_room');
     if (this.rooms.size + this.creating >= this.config.maxRooms) throw new Error('room_limit');
@@ -20,8 +26,8 @@ export class Rooms {
       const passwordHash = await hashPassword(password);
       if (!peer.ws || peer.roomId) throw new Error('session_changed');
       const room = { id: randomUUID(), name, maxUsers, private: input.private === true, password: passwordHash,
-        hostId: peer.id, members: new Map([[peer.id, peer]]), invitations: new Map(), streamEpoch: 0, title: '', emptySince: 0 };
-      this.rooms.set(room.id, room); peer.roomId = room.id; if (!room.private) this.changed(); this.broadcast(room); return this.publicRoom(room, true);
+        hostId: peer.id, members: new Map([[peer.id, peer]]), invitations: new Map(), streamEpoch: 0, title: '', emptySince: null };
+      this.rooms.set(room.id, room); peer.roomId = room.id; if (!room.private) this.changed(); this.broadcast(room); return roomForPeer(this.publicRoom(room, true), room, peer);
     } finally { this.creating--; }
   }
   async join(peer, input) {
@@ -35,10 +41,10 @@ export class Rooms {
     if (!peer.ws || peer.roomId || this.rooms.get(room.id) !== room) throw new Error('session_changed');
     if (room.members.size >= room.maxUsers) throw new Error('room_full');
     if (invited) room.invitations.delete(input.invitation);
-    room.members.set(peer.id, peer); peer.roomId = room.id; room.emptySince = 0;
+    room.members.set(peer.id, peer); peer.roomId = room.id; room.emptySince = null;
     if (!room.hostId) room.hostId = peer.id;
     if (!room.private) this.changed();
-    this.broadcast(room); return this.publicRoom(room, true);
+    this.broadcast(room); return roomForPeer(this.publicRoom(room, true), room, peer);
   }
   leave(peer) {
     const room = this.rooms.get(peer.roomId); peer.roomId = null;
@@ -71,15 +77,31 @@ export class Rooms {
   }
   stream(peer, input) {
     const room = this.owned(peer);
-    if (!Number.isSafeInteger(input.epoch) || input.epoch < 0) throw new Error('invalid_epoch');
-    room.streamEpoch = input.epoch; room.title = text(input.title, 160, true);
+    if (!Number.isSafeInteger(input.epoch) || input.epoch < 0 || input.epoch > Number.MAX_SAFE_INTEGER - 2) throw new Error('invalid_epoch');
+    updateProgramme(room, input);
     this.broadcast(room); return true;
   }
   pruneInvites(room) { for (const [key, expiry] of room.invitations) if (expiry <= Date.now()) room.invitations.delete(key); }
   sweep() {
+    const now = Date.now();
     for (const room of this.rooms.values()) {
       this.pruneInvites(room);
-      if (room.emptySince && Date.now() - room.emptySince > this.config.emptyRoomMs) { this.rooms.delete(room.id); if (!room.private) this.changed(); }
+      let online = false;
+      let lastDisconnect = null;
+      for (const member of room.members.values()) {
+        if (member.ws) { online = true; break; }
+        if (Number.isFinite(member.disconnectedAt)) lastDisconnect = Math.max(lastDisconnect ?? member.disconnectedAt, member.disconnectedAt);
+      }
+      if (online) { room.emptySince = null; continue; }
+      // Retained offline members are not occupants, but their reconnect grace
+      // must expire before reclaiming the room. A later disconnect restarts it.
+      room.emptySince = Math.max(room.emptySince ?? lastDisconnect ?? now, lastDisconnect ?? -Infinity);
+      const timeout = room.members.size ? Math.max(this.config.emptyRoomMs, this.config.reconnectMs) : this.config.emptyRoomMs;
+      if (now - room.emptySince < timeout) continue;
+      for (const member of room.members.values()) if (member.roomId === room.id) member.roomId = null;
+      room.members.clear(); room.invitations.clear(); room.track = null; room.title = ''; room.streamEpoch = 0;
+      this.rooms.delete(room.id);
+      if (!room.private) this.changed();
     }
   }
 }
