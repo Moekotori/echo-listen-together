@@ -21,8 +21,8 @@ test('short receiver congestion drops audio without closing and recovers without
 test('accepts TCP catch-up bursts while sustaining normal 20ms audio', () => {
   const ws = { close: () => assert.fail('legitimate audio must remain connected') };
   const budget = new AudioRateBudget(0);
-  for (let i = 0; i < 150; i++) assert.equal(budget.accept(356, ws, 0), true);
-  for (let time = 20; time <= 60000; time += 20) assert.equal(budget.accept(356, ws, time), true);
+  for (let i = 0; i < 150; i++) assert.equal(budget.accept(676, ws, 0), true);
+  for (let time = 20; time <= 60000; time += 20) assert.equal(budget.accept(676, ws, time), true);
 });
 
 test('bounds packet and byte bursts and disconnects persistent excess', () => {
@@ -47,10 +47,8 @@ test('retains disconnected identities for sixty seconds by default with bounded 
   assert.throws(() => readConfig({ RECONNECT_SECONDS: '121' }));
 });
 
-test('three renditions retain bounded catch-up and normal sustained traffic', () => {
-  const ws = { close: () => assert.fail('valid multi-quality audio must stay connected') };
-  const budget = new AudioRateBudget(0, 3);
-  for (let i = 0; i < 450; i++) assert.equal(budget.accept(850, ws, 0), true);
-  for (let time = 20; time <= 60000; time += 20)
-    for (let tier = 0; tier < 3; tier++) assert.equal(budget.accept(850, ws, time), true);
+test('fixed 256 remains within the same bounded rate budget', () => {
+  const ws = { close: () => assert.fail('fixed 256 audio must stay connected') };
+  const budget = new AudioRateBudget(0);
+  for (let time = 20; time <= 60000; time += 20) assert.equal(budget.accept(676, ws, time), true);
 });

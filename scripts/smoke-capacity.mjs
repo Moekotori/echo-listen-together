@@ -22,7 +22,7 @@ try {
     const host = await connect(); hosts.push(host);
     const room = await host.request('create', { name: `Synthetic room ${roomIndex}`, maxUsers: 10 });
     for (let j = 0; j < 9; j++) { const guest = await connect(); await guest.request('join', { roomId: room.id }); }
-    await host.request('stream', { epoch: 1 });
+    await host.request('stream', { bitrate: 256000, epoch: 1 });
   }
   const packet = Buffer.alloc(356); packet.write('ELTA'); packet[4] = 1; packet.writeUInt16LE(36, 6); packet.writeBigUInt64LE(1n, 8); packet.writeUInt32LE(48000, 28); packet.writeUInt16LE(320, 32); packet[34] = 2; packet[35] = 20;
   for (let i = 0; i < 100; i++) { packet.writeUInt32LE(i, 16); for (const host of hosts) host.ws.send(packet); await new Promise(resolve => setTimeout(resolve, 20)); }

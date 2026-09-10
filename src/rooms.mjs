@@ -1,4 +1,4 @@
-import { roomForPeer } from './room-features.mjs';
+import { fixedAudioBitrate, roomForPeer } from './room-features.mjs';
 import { updateProgramme } from './programme-state.mjs';
 import { randomUUID } from 'node:crypto';
 import { token, text, hashPassword, checkPassword } from './security.mjs';
@@ -78,6 +78,7 @@ export class Rooms {
   stream(peer, input) {
     const room = this.owned(peer);
     if (!Number.isSafeInteger(input.epoch) || input.epoch < 0 || input.epoch > Number.MAX_SAFE_INTEGER - 2) throw new Error('invalid_epoch');
+    if (input.epoch > 0 && (input.bitrate !== fixedAudioBitrate || input.multiQuality === true)) throw new Error('fixed_audio_quality');
     updateProgramme(room, input);
     this.broadcast(room); return true;
   }

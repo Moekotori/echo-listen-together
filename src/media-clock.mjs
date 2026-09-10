@@ -1,5 +1,4 @@
 import { readMediaClock } from './lyrics.mjs';
-import { qualityIndex } from './room-features.mjs';
 
 // Small clock deltas never repeat lyrics, artwork, chat or member snapshots.
 export function updateMediaClock(rooms, peer, input, now = performance.now()) {
@@ -15,6 +14,6 @@ export function updateMediaClock(rooms, peer, input, now = performance.now()) {
   const rate = clock?.mediaAnchors.at(-1)?.playbackRate;
   if (rate !== undefined) room.track.technical = { ...room.track.technical, playbackRate: rate };
   for (const member of room.members.values()) rooms.notify(member, { type: 'clock', roomId: room.id,
-    epoch: room.streamEpoch + (member.id === room.hostId ? 0 : qualityIndex(room, member)), clock });
+    epoch: room.streamEpoch, clock });
   return true;
 }

@@ -33,8 +33,8 @@ try {
   assert((await guest.request('join', { roomId, password })).result);
   assert.equal((await outsider.request('join', { roomId, password })).error, 'room_full');
   assert.equal((await outsider.request('rooms')).result.some(r => r.id === roomId), false);
-  assert.equal((await guest.request('stream', { epoch: 123 })).error, 'host_required');
-  assert.equal((await host.request('stream', { epoch: 123 })).result, true);
+  assert.equal((await guest.request('stream', { bitrate: 256000, epoch: 123 })).error, 'host_required');
+  assert.equal((await host.request('stream', { bitrate: 256000, epoch: 123 })).result, true);
   // A valid 20ms Opus silence frame; compare binary payload unchanged across the TLS proxy and relay.
   const packet = Buffer.alloc(39); packet.write('ELTA'); packet[4] = 1; packet.writeUInt16LE(36, 6); packet.writeBigUInt64LE(123n, 8); packet.writeUInt32LE(48000, 28); packet.writeUInt16LE(3, 32); packet[34] = 2; packet[35] = 20; packet.set([0xf8, 0xff, 0xfe], 36);
   for (let i = 0; i < 20; i++) { packet.writeUInt32LE(i, 16); host.ws.send(packet); await new Promise(r => setTimeout(r, 20)); }

@@ -6,6 +6,8 @@ A self-hosted room service and real-time Opus relay for ECHO. The host shares on
 
 You need an **ECHO desktop client** that supports Listen Together. This repository contains the server, not a browser-based player.
 
+**Audio is fixed at 256 kbps with no quality selector.** Each host uploads one Opus stream. Update clients and servers together; legacy hosts are explicitly rejected when announcing unsupported audio.
+
 ## 1. Prerequisites
 
 - A Linux server with Git, Docker Engine, and the Docker Compose plugin (`docker compose`). See the [official Docker installation guide](https://docs.docker.com/engine/install/).
@@ -167,7 +169,7 @@ For a password-protected server, securely provide `SERVER_PASSWORD` through the 
 
 Real WebSocket tests cover permissions, capacity, concurrent password joins, reconnect takeover, room notifications, and audio relay. The 200-client script runs **20 rooms with 1 host and 9 listeners each for about 2 seconds**, checking 18,000 relayed packets. Its process contains both server and test clients; the memory figure is not a standalone server benchmark. It does not establish long-running or public-network capacity.
 
-Default audio uses 48 kHz stereo Opus in 20 ms packets. At 128 kbps, 200 listener streams require approximately 25.6 Mbps of audio payload, plus protocol overhead and headroom. New audio is dropped when a receiver has more than 16 KiB queued; ten seconds of sustained congestion closes that connection to avoid unbounded buffering. TLS WebSocket uses TCP, so packet loss can disrupt real-time delivery. Carrier routes, peak hours, sustained load, and two-account Steam behavior require separate validation.
+Audio is fixed at 256 kbps, 48 kHz stereo Opus in 20 ms packets. 200 listener streams require approximately 51.2 Mbps of audio payload, plus protocol overhead and headroom. New audio is dropped when a receiver has more than 16 KiB queued; ten seconds of sustained congestion closes that connection to avoid unbounded buffering. TLS WebSocket uses TCP, so packet loss can disrupt real-time delivery. Carrier routes, peak hours, sustained load, and two-account Steam behavior require separate validation.
 
 See the [2026-09-10 synchronization record](docs/verification-2026-09-10.md) for the current server checks, and the [2026-09-09 verification record](docs/verification-2026-09-09.md) for earlier native audio and reconnect results. Both describe their validation boundaries.
 
@@ -186,3 +188,5 @@ python3 scripts/listening-server-report/collect.py --hours 6
 ```
 
 Markdown and JSON reports are written to `misc/diagnostic-reports/`, retaining the latest ten pairs. They include container state, source hashes, per-connection counters and event timelines. Collection does not restart the service. Cumulative snapshots are not added together, and a submitted WebSocket send is not proof of audible client playback. See the [report tool documentation](scripts/listening-server-report/README.md).
+
+See the [fixed-256 rollout checks](docs/fixed-256-verification.md) for deployment and constrained-network validation.

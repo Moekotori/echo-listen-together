@@ -6,9 +6,9 @@ import json
 COUNTERS = ('ingress', 'accepted', 'forwarded', 'invalid', 'unauthorized',
             'epochRejected', 'rateLimited', 'congested')
 EVENTS = frozenset(('ready', 'connection_open', 'connection_closed', 'connection_summary',
-                   'stream_expected', 'stream_stopped', 'audio_first_packet_timeout',
+                   'control_rejected', 'stream_expected', 'stream_stopped', 'audio_first_packet_timeout',
                    'audio_stalled', 'audio_recovered', 'audio_transport_fault'))
-REASONS = frozenset(('connection_closed', 'heartbeat_timeout', 'hello_timeout', 'invalid_audio',
+REASONS = frozenset(('fixed_audio_quality', 'connection_closed', 'heartbeat_timeout', 'hello_timeout', 'invalid_audio',
                     'ingress_limit', 'invalid_request', 'control_rate_limit', 'audio_rate_limit',
                     'slow_receiver', 'server_shutdown', 'replaced'))
 LIMITS = {'log_lines': 5000, 'connections': 1000, 'timeline': 300}
@@ -89,7 +89,7 @@ def summarize(lines):
         for key in COUNTERS:
             # Snapshots are cumulative: summing them would multiply packet counts.
             row['counters'][key] = max(row['counters'][key], event.get(key, 0))
-        if event['event'] in ('audio_first_packet_timeout', 'audio_stalled', 'audio_transport_fault'):
+        if event['event'] in ('audio_first_packet_timeout', 'audio_stalled', 'audio_transport_fault', 'control_rejected'):
             row['faults'][event['event']] = row['faults'].get(event['event'], 0) + 1
         if event['event'] == 'connection_closed':
             row.update(closed=True, closeCode=event.get('closeCode'), reason=event.get('reason', 'unknown'))
@@ -110,7 +110,7 @@ def markdown(report):
              '- invalid / unauthorized / epochRejected / rateLimited：分别表示协议无效、非房主/无有效流、流编号不符、发送限流。',
              '- congested：服务器向该听众发送时出现积压；可能涉及网络或接收端处理速度。',
              '- forwarded 仅表示提交 WebSocket 发送，不能证明客户端收到、解码或扬声器出声。',
-             '- 计数为可见连接生命周期的累计最大值，不是本时间窗口内的精确流量；多音质房主会发送多条流，不能直接用房主/听众计数相减算丢包。',
+             '- 计数为可见连接生命周期的累计最大值，不是本时间窗口内的精确流量；房主和听众的连接时段及人数可能不同，不能直接相减算丢包。',
              '- 未出现异常事件不等于没有故障。请结合用户发生时间、音质、客户端 epoch 和解码/拒包/输出计数。', '',
              '## 采集完整性', '', '```json', json.dumps(report['collection'], ensure_ascii=False, indent=2), '```',
              f"日志自身省略事件数：{data['omittedByLogger']}；报告省略连接数：{data['excludedConnections']}。",

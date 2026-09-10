@@ -12,7 +12,6 @@ export function updateProgramme(room, input) {
     room.clockAt = undefined;
   }
   room.programmeState = state;
-  room.multiQuality = input.multiQuality === true && input.epoch > 0;
   room.streamEpoch = input.epoch;
   room.title = state === 'stopped' ? '' : title;
 }

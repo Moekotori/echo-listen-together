@@ -1,5 +1,5 @@
 const counterNames = ['ingress', 'accepted', 'forwarded', 'invalid', 'unauthorized', 'epochRejected', 'rateLimited', 'congested'];
-const reasons = new Set(['connection_closed', 'heartbeat_timeout', 'hello_timeout', 'invalid_audio', 'ingress_limit',
+const reasons = new Set(['fixed_audio_quality', 'connection_closed', 'heartbeat_timeout', 'hello_timeout', 'invalid_audio', 'ingress_limit',
   'invalid_request', 'control_rate_limit', 'audio_rate_limit', 'slow_receiver', 'server_shutdown', 'replaced']);
 /** Fixed state per live socket; no content, identities, IPs, packet buffers or per-packet logging. */
 export function createDiagnostics({ now = () => performance.now(), write = line => {
@@ -54,5 +54,9 @@ export function createDiagnostics({ now = () => performance.now(), write = line 
       closeCode, elapsedMs: now() - state.startedAt, ...state.counters });
     sockets.delete(ws);
   }
-  return { open, count, reason, observe, close };
+  function controlRejected(ws, value) {
+    const state = sockets.get(ws);
+    if (state) emit(state, 'control_rejected', { reason: reasons.has(value) ? value : 'unknown' });
+  }
+  return { open, count, reason, observe, close, controlRejected };
 }

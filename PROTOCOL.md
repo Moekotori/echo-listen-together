@@ -6,7 +6,7 @@
 `{epoch, clock}`. The epoch must equal the current active programme. Clock data
 uses the existing bounded `mediaAnchors` schema, or null to mark it unavailable.
 The server emits `{type: "clock", roomId, epoch, clock}` only to members, using
-each listener's selected rendition epoch. These events never include lyrics,
+the shared base epoch. These events never include lyrics,
 artwork or member lists. Latest clocks remain in normal room snapshots for late
 joiners. Changed updates have a 500 ms cooldown; identical updates are no-ops.
 Clients should coalesce updates and leave room for other control commands. Legacy
@@ -33,7 +33,7 @@ WebSocket endpoint: PUBLIC_URL + `/v1/socket`. No browser Origin accepted. TLS i
 - `leave`: `{}` → true.
 - `invite`: `{}` → `{server,roomId,invitation,expiresAt}`, host only; 5min, single use.
 - `revokeInvites`: `{}` → true, host only.
-- `stream`: `{epoch,title?}` → true, host only. Positive safe integer epoch identifies current programme; 0 stops. Publish control before audio. Restart with fresh epoch after seek, discontinuity or reconnect.
+- `stream`: `{epoch,title?}` → true, host only. Positive safe integer epoch identifies current programme; 0 stops. Publish control before audio. Restart with fresh epoch after seek, discontinuity or reconnect. Positive epochs require `bitrate:256000`.
 
 Push: `{type:"room",room:Room|null,reason?}`. Room includes id/name/locked/private/count/maxUsers/hostId/streamEpoch/title/members; members contain id/name/online, never credentials. Host disconnect sets epoch=0 immediately; expiry ends the room. Heartbeat ping every 10s.
 
@@ -42,16 +42,20 @@ Binary audio uses ELTA v1: magic ELTA [0..3], version=1 [4], flags [5], LE heade
 Connection code: `echo-listen:` + base64url UTF-8 JSON `{server,roomId?,invitation?}`. It contains no admin token or room password. Treat invite codes as secrets; public discovery must never expose invitations. Steam Lobby metadata carries server/roomId only; password remains required for normal friend joining.
 
 Lobby invalidation: `{type:"rooms-changed"}` is a small additive push event for connected peers outside rooms. Public room create/join/leave/delete changes are coalesced over 400ms. Clients should debounce and fetch `rooms`, with at most one refresh in flight. No private room metadata or notifications about private-only changes are sent. Older clients may ignore this event and continue using manual refresh.
-# Room chat and personal quality extensions
+## Fixed 256 kbps audio
 
-The protocol remains version 1. `hello.result.capabilities` advertises `chat: true` and `audioQualities: true`. Older clients may ignore both. Public Steam IDs may be supplied in `hello.data.steamId` (17 digits beginning with `7656119`) and appear only in member snapshots for avatar lookup. They are hints, not authenticated identities.
+The ELTA packet format remains version 1. `hello.result.capabilities.fixedAudioBitrate` is `256000`; `audioQualities` is false. New clients require this capability before entering rooms.
 
-* `chat {text}`: current members only; non-empty plain text, at most 500 UTF-16 code units and at least 750ms between messages per peer. Sender identity is derived from membership. Replies `true`, broadcasts `{type:"chat", message:{id,roomId,senderId,name,text,sentAt}}` only to that room. No server history or message logging. Errors: `room_required`, `invalid_chat`, `chat_rate_limit`.
-* `quality {value}`: selects 128, 256 or 320 for this peer. Replies `true` and sends a personalized room snapshot. The preferred value survives session resume; legacy sources fall back to 128 without erasing that preference.
-* `stream {epoch,title,multiQuality:true}`: host declares three renditions, with base epoch E for 128, E+1 for 256, E+2 for 320. Base epoch must be at most `Number.MAX_SAFE_INTEGER-2`. All renditions use the unchanged ELTA v1 header, aligned sequence/timestamps and independent Opus encoders. Without `multiQuality`, only E is accepted and forwarded.
-* Detailed room snapshots add `qualities`, `quality`, `preferredQuality`. Each guest's `streamEpoch` is their actual selected epoch; host sees base E. Zero means no active stream. Other guests' selections remain private. Senders must confirm native multi-quality support before declaring it.
+* `stream {epoch, title?, bitrate:256000, programmeState?}` starts the single base-epoch stream. Positive epochs require this bitrate and reject `multiQuality:true` with `fixed_audio_quality`. Epoch zero still stops or pauses without audio.
+* There is no quality-switching operation. `quality` requests return `fixed_audio_quality`, including requests for 256; clients must remove the selector.
+* Member snapshots retain `qualities:[256]`, `quality:256` and `preferredQuality:256` for older listeners. All members and media clocks use the base epoch; E+1/E+2 packets are rejected.
+* Older listeners can decode the base Opus stream. Older hosts must update before broadcasting; legacy 128 kbps or multi-rendition announcements are explicitly rejected instead of being mislabeled.
+* A fixed stream is 50 packets/second with 640-byte CBR Opus payloads. ELTA adds 36 bytes per packet: 33,800 bytes/second before WebSocket/TLS/TCP overhead. The host creates only one encoder.
+* The send budget remains 100 packets and 65,536 bytes per second with a bounded burst allowance. Audio backlog is limited to 16 KiB and total queued socket data to 64 KiB for audio admission. Pending control bytes are tracked separately so a lyric snapshot is not mistaken for audio backlog. Sustained congestion still closes slow receivers.
 
-The relay validates host membership and every packet, forwarding only the selected rendition. Multi-quality limits are 300 packets / 196608 bytes per one-second window, allowing a bounded burst over the normal 150 packets/second. Single-stream limits remain 100 / 65536. Audio socket buffering stays bounded at 16 KiB; sustained congestion for ten seconds closes the receiver. No second replay queue is created. Standard clients never receive alternative epochs. A rendition switch may rebuffer; seamless or lossless playback is not promised.
+## Room chat
+
+`chat {text}` remains member-only, with at most 500 UTF-16 code units and a 750 ms cooldown. The server derives sender identity from membership and broadcasts `{type:"chat", message:{id,roomId,senderId,name,text,sentAt}}` only to the room, with no chat history or content logging. Optional Steam IDs in hello remain unverified avatar hints rather than authentication.
 
 ## Current programme metadata and room controls
 

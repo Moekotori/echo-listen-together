@@ -1,3 +1,4 @@
+import { reserveControlBytes } from './socket-control-budget.mjs';
 // Fixed per-connection counters only. No retained request bodies or deferred queues.
 export function parseControl(raw) {
   if (!Buffer.isBuffer(raw) || raw.length > 49152) throw new Error('invalid_request');
@@ -50,6 +51,8 @@ export function sendControl(ws, value) {
   if (ws.bufferedAmount > 65536) { ws.terminate(); return false; }
   const data = JSON.stringify(value);
   if (Buffer.byteLength(data) > 262144) { ws.terminate(); return false; }
-  try { ws.send(data, error => { if (error) ws.terminate(); }); return true; }
-  catch { ws.terminate(); return false; }
+  const release = reserveControlBytes(ws, Buffer.byteLength(data));
+  if (!release) { ws.terminate(); return false; }
+  try { ws.send(data, error => { release(); if (error) ws.terminate(); }); return true; }
+  catch { release(); ws.terminate(); return false; }
 }

@@ -11,7 +11,6 @@ export function transferHost(rooms, peer, input) {
   room.title = '';
   room.track = null;
   room.artworkAt = undefined;
-  room.multiQuality = false;
   room.invitations.clear();
   rooms.broadcast(room);
   return true;

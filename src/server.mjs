@@ -1,5 +1,4 @@
 import { createDiagnostics } from './diagnostics.mjs';
-import { qualityIndex } from './room-features.mjs';
 import { transferHost } from './host-transfer.mjs';
 import { updateMediaClock } from './media-clock.mjs';
 import { sendTyping } from './typing.mjs';
@@ -9,7 +8,7 @@ import { WebSocketServer } from 'ws';
 import { token, text, secretEqual } from './security.mjs';
 import { Rooms } from './rooms.mjs';
 import { updateArtwork } from './artwork.mjs';
-import { selectQuality, sendChat } from './room-features.mjs';
+import { fixedAudioBitrate, sendChat } from './room-features.mjs';
 import { relayAudio, validPacket } from './relay.mjs';
 export function createListenServer(config, { now = () => performance.now() } = {}) {
   const diagnostics = createDiagnostics({ now });
@@ -89,7 +88,7 @@ export function createListenServer(config, { now = () => performance.now() } = {
           peer.ws = ws; seen(); clearTimeout(helloTimer);
           if (replacedSocket && replacedSocket !== ws) { diagnostics.reason(replacedSocket, 'replaced'); replacedSocket.terminate(); }
           reply({ result: { protocol: 1, peerId: peer.id, resumeToken: peer.resumeToken, name: config.name,
-            capabilities: { trackMetadata: true, trackArtwork: true, chat: true, typing: true, audioQualities: true, programmeState: true, transferHost: true, mediaClock: true },
+            capabilities: { trackMetadata: true, trackArtwork: true, chat: true, typing: true, audioQualities: false, fixedAudioBitrate, programmeState: true, transferHost: true, mediaClock: true },
             limits: { maxUsers: config.maxUsers, maxRooms: config.maxRooms, maxRoomUsers: config.maxRoomUsers } } });
           if (peer.roomId) {
             const room = rooms.rooms.get(peer.roomId);
@@ -108,7 +107,7 @@ export function createListenServer(config, { now = () => performance.now() } = {
           case 'transferHost': result = transferHost(rooms, peer, input); break;
           case 'typing': result = sendTyping(rooms, peer, input); break;
           case 'chat': result = sendChat(rooms, peer, input); break;
-          case 'quality': result = selectQuality(rooms, peer, input); break;
+          case 'quality': throw new Error('fixed_audio_quality');
           case 'rooms': result = rooms.list(); break;
           case 'create': result = await rooms.create(peer, input); break;
           case 'join': result = await rooms.join(peer, input); break;
@@ -121,7 +120,7 @@ export function createListenServer(config, { now = () => performance.now() } = {
         }
         seen();
         reply({ result });
-      } catch (error) { reply({ error: /^[a-z_]+$/.test(error.message) ? error.message : 'invalid_request' }); }
+      } catch (error) { if (error.message === 'fixed_audio_quality') diagnostics.controlRejected(ws, error.message); reply({ error: /^[a-z_]+$/.test(error.message) ? error.message : 'invalid_request' }); }
       finally { busy = false; }
     });
     ws.on('close', (code, reason) => {
@@ -141,7 +140,7 @@ export function createListenServer(config, { now = () => performance.now() } = {
       if (!peer.ws) continue;
       const room = rooms.rooms.get(peer.roomId);
       const host = room?.hostId === peer.id;
-      diagnostics.observe(peer.ws, room?.streamEpoch ? room.streamEpoch + (host ? 0 : qualityIndex(room, peer)) : 0, room ? (host ? 'host' : 'guest') : 'none');
+      diagnostics.observe(peer.ws, room?.streamEpoch || 0, room ? (host ? 'host' : 'guest') : 'none');
     }
   }, 1000);
   const ping = setInterval(() => { for (const ws of connections) { if (ws.readyState !== 1) continue; if (!ws.isAlive()) { diagnostics.reason(ws, 'heartbeat_timeout'); ws.terminate(); } else ws.ping(); } }, 10000);
