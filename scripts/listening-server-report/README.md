@@ -31,3 +31,21 @@ python3 scripts/listening-server-report/collect.py --hours 2
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/listening-server-report -p 'test_*.py' -v
 ```
+
+## 详细排错流程
+
+报告先展示证据驱动的排查事项，再展示采集状态、代码哈希、连接累计计数、每类故障首次/末次时间、恢复次数和最近事件。
+JSON 的 `diagnosis` 与 Markdown 使用相同规则，每条包含 `code`、`severity`、`title`、`evidence`、`nextStep`、`boundary`。
+`error` 表示采集证据中存在明确异常，**不表示采集时仍在故障**；历史错误不会因修复而消失。
+
+1. 在故障发生后立即执行 `python3 scripts/listening-server-report/collect.py --hours 1`，保留同名 Markdown 和 JSON。
+2. 先检查“采集完整性”，再看服务状态与代码一致性。采集失败、日志截断或缺少哈希时，不作健康/一致性推断。
+3. 按控制请求、房主输入、服务器转发、听众接收/解码/输出的顺序定位；单人房间没有转发不代表故障。
+4. 对照异常连接首次/末次事件与恢复时间。connection 是临时服务端编号，不是用户或房间标识；仅凭编号不能把两端关联。
+5. 修复后采集新的短窗口，并验证实际播放、暂停恢复、seek、切歌。服务端恢复/转发事件不能代替听众出声确认。
+
+`fixed_audio_quality` 会提示固定 `bitrate=256000`、禁止多音质及旧客户端构建的检查方向。
+旧服务端日志没有实际请求类型、参数和客户端构建信息，因此报告不会编造具体请求值或版本，也不会自动修改服务来补齐证据。
+
+哈希覆盖 server、relay、diagnostics、rooms、room-features、programme-state、transport-policy 七个关键源码，仍不等于整个镜像或 native 构建的一致性证明。
+每个连接仅保留固定种类故障的首末时间及计数；详细版不增加日志采集量、不无限缓存时间线，不自动上传或重启服务。

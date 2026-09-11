@@ -3,6 +3,8 @@ import collections
 import datetime as dt
 import json
 
+from troubleshooting import detailed_sections
+
 COUNTERS = ('ingress', 'accepted', 'forwarded', 'invalid', 'unauthorized',
             'epochRejected', 'rateLimited', 'congested')
 EVENTS = frozenset(('ready', 'connection_open', 'connection_closed', 'connection_summary',
@@ -50,6 +52,7 @@ def event_from_line(line):
 
 def summarize(lines):
     events = collections.Counter()
+    rejected = collections.Counter()
     connections = collections.OrderedDict()
     active = {}
     timeline = collections.deque(maxlen=LIMITS['timeline'])
@@ -63,6 +66,8 @@ def summarize(lines):
         parsed += 1
         first = first or event['timestamp']; last = event['timestamp']
         events[event['event']] += 1
+        if event['event'] == 'control_rejected':
+            rejected[event.get('reason', 'unknown')] += 1
         omitted += event.get('omitted', 0)
         timeline.append(event)
         if event['event'] == 'ready':
@@ -75,7 +80,7 @@ def summarize(lines):
             active[connection] = key
             connections[key] = {'connection': connection, 'run': run, 'roles': [], 'epochs': [],
                                 'first': event['timestamp'], 'last': event['timestamp'],
-                                'counters': dict.fromkeys(COUNTERS, 0), 'faults': {}, 'closed': False}
+                                'counters': dict.fromkeys(COUNTERS, 0), 'faults': {}, 'faultWindows': {}, 'rejectionReasons': {}, 'recoveries': 0, 'lastRecovery': None, 'closed': False}
             if len(connections) > LIMITS['connections']:
                 old_key, old = connections.popitem(last=False)
                 if active.get(old['connection']) == old_key:
@@ -90,10 +95,19 @@ def summarize(lines):
             # Snapshots are cumulative: summing them would multiply packet counts.
             row['counters'][key] = max(row['counters'][key], event.get(key, 0))
         if event['event'] in ('audio_first_packet_timeout', 'audio_stalled', 'audio_transport_fault', 'control_rejected'):
-            row['faults'][event['event']] = row['faults'].get(event['event'], 0) + 1
+            kind = event['event']
+            row['faults'][kind] = row['faults'].get(kind, 0) + 1
+            window = row['faultWindows'].setdefault(kind, {'first': event['timestamp'], 'last': event['timestamp']})
+            window['last'] = event['timestamp']
+        if event['event'] == 'audio_recovered':
+            row['recoveries'] += 1
+            row['lastRecovery'] = event['timestamp']
+        if event['event'] == 'control_rejected':
+            reason = event.get('reason', 'unknown')
+            row['rejectionReasons'][reason] = row['rejectionReasons'].get(reason, 0) + 1
         if event['event'] == 'connection_closed':
             row.update(closed=True, closeCode=event.get('closeCode'), reason=event.get('reason', 'unknown'))
-    return {'parsedEvents': parsed, 'firstEvent': first, 'lastEvent': last, 'eventCounts': dict(events),
+    return {'parsedEvents': parsed, 'firstEvent': first, 'lastEvent': last, 'eventCounts': dict(events), 'rejectionReasons': dict(rejected),
             'omittedByLogger': omitted, 'excludedConnections': excluded_connections,
             'connections': list(connections.values()), 'timeline': list(timeline)}
 
@@ -102,28 +116,51 @@ def markdown(report):
     data = report['relay']; rows = data['connections']
     faults = [r for r in rows if r['faults'] or any(r['counters'][k] for k in COUNTERS[3:])
               or (r['closed'] and r.get('closeCode') not in (1000, 1001, 1005))]
+    diagnosis = []
+    quality_rejections = data.get('rejectionReasons', {}).get('fixed_audio_quality', 0)
+    if quality_rejections:
+        affected = [r for r in rows if r.get('rejectionReasons', {}).get('fixed_audio_quality')]
+        no_audio = sum(r['counters']['ingress'] == 0 for r in affected)
+        diagnosis = [
+            f'- **音质协议不兼容：观察到 {quality_rejections} 次 fixed_audio_quality 拒绝。** 当前服务器只接受固定 256 kbps 音频流，也不接受切换音质请求。',
+            '- 音频启动要求 bitrate=256000 且 multiQuality 不为 true；缺少码率字段、码率不符或请求多音质都可能触发。',
+            f'- 保留的连接中有 {len(affected)} 个出现此拒绝，其中 {no_audio} 个未观察到输入音频包；控制连接正常不代表音频启动成功。',
+            '- 处理建议：房主与听众更新到支持固定 256 kbps 的客户端；开发环境需重新构建并彻底退出旧进程后启动，再开启共享。反复重试或重启服务器不能修复参数不兼容。',
+            '- 证据边界：旧事件未记录请求类型、实际码率及客户端构建版本，不能仅凭此错误断定具体参数或版本；修复后需检查新连接的拒绝事件及音频计数，并由听众确认出声。',
+        ]
     lines = ['# 一起听歌服务端排错报告', '', f"生成时间（UTC）：{report['generatedAt']}",
              f"请求范围：最近 {report['hours']} 小时；实际日志：{data['firstEvent']} → {data['lastEvent']}", '',
              '## 排查结论与证据边界', '',
              f"- 发现 {len(faults)} 个存在异常证据的连接记录，共读取 {data['parsedEvents']} 条结构化事件。",
+             *diagnosis,
              '- 首包超时/断流：服务器在声明的音频流中没有持续观察到有效输入或转发；结合房主/听众角色判断断点。',
              '- invalid / unauthorized / epochRejected / rateLimited：分别表示协议无效、非房主/无有效流、流编号不符、发送限流。',
              '- congested：服务器向该听众发送时出现积压；可能涉及网络或接收端处理速度。',
              '- forwarded 仅表示提交 WebSocket 发送，不能证明客户端收到、解码或扬声器出声。',
              '- 计数为可见连接生命周期的累计最大值，不是本时间窗口内的精确流量；房主和听众的连接时段及人数可能不同，不能直接相减算丢包。',
              '- 未出现异常事件不等于没有故障。请结合用户发生时间、音质、客户端 epoch 和解码/拒包/输出计数。', '',
+             *detailed_sections(report),
              '## 采集完整性', '', '```json', json.dumps(report['collection'], ensure_ascii=False, indent=2), '```',
              f"日志自身省略事件数：{data['omittedByLogger']}；报告省略连接数：{data['excludedConnections']}。",
              '最多采集每个容器 5000 行/8 MiB，最多保留 1000 个连接及最后 300 条时间线。容器删除或日志轮转前的事件可能已不可用。', '',
              '## 服务、资源与代码版本', '', '```json',
              json.dumps(report['runtime'], ensure_ascii=False, indent=2), '```', '',
              '## 事件统计', '', '```json', json.dumps(data['eventCounts'], ensure_ascii=False, indent=2), '```', '',
+             '## 控制请求拒绝原因（可见事件次数）', '', '```json', json.dumps(data.get('rejectionReasons', {}), ensure_ascii=False, indent=2), '```', '',
              '## 连接汇总（累计计数）', '',
-             '| 运行/连接 | 角色 | 最近流编号 | 输入 | 通过 | 转发 | 无效/无权/错流/限流/拥塞 | 异常事件 | 关闭原因 |',
-             '| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |']
+             '| 运行/连接 | 角色 | 最近流编号 | 输入 | 通过 | 转发 | 无效/无权/错流/限流/拥塞 | 异常事件 | 请求拒绝原因/次数 | 关闭原因 |',
+             '| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |']
     for r in rows:
         c = r['counters']
-        lines.append(f"| {r['run']}/{r['connection']} | {','.join(r['roles']) or 'none'} | {','.join(map(str, r['epochs'])) or '-'} | {c['ingress']} | {c['accepted']} | {c['forwarded']} | {'/'.join(str(c[k]) for k in COUNTERS[3:])} | {','.join(r['faults']) or '-'} | {r.get('reason', '未观察到关闭')} ({r.get('closeCode', '-')}) |")
+        lines.append(f"| {r['run']}/{r['connection']} | {','.join(r['roles']) or 'none'} | {','.join(map(str, r['epochs'])) or '-'} | {c['ingress']} | {c['accepted']} | {c['forwarded']} | {'/'.join(str(c[k]) for k in COUNTERS[3:])} | {','.join(r['faults']) or '-'} | {','.join(f'{key}:{value}' for key, value in r.get('rejectionReasons', {}).items()) or '-'} | {r.get('reason', '未观察到关闭')} ({r.get('closeCode', '-')}) |")
+    lines.extend(['', '## 异常连接时间与恢复记录（UTC）', '',
+                  '未观察到关闭不代表仍在线；恢复记录只证明服务器再次观察到有效音频。', '',
+                  '| 运行/连接 | 可见起止 | 故障类型：次数 / 首次 / 末次 | 恢复次数 / 末次 |',
+                  '| --- | --- | --- | --- |'])
+    for r in faults:
+        windows = '; '.join(f"{kind}: {r['faults'][kind]} / {times['first']} / {times['last']}"
+                            for kind, times in r.get('faultWindows', {}).items()) or '仅累计计数或关闭异常；发生时间未知'
+        lines.append(f"| {r['run']}/{r['connection']} | {r['first']} → {r['last']} | {windows} | {r.get('recoveries', 0)} / {r.get('lastRecovery') or '-'} |")
     lines.extend(['', '## 最近事件时间线', '', '```jsonl',
                   *[json.dumps(e, ensure_ascii=False) for e in data['timeline']], '```', '',
                   '## 网关摘要', '', '```json', json.dumps(report['gateway'], ensure_ascii=False, indent=2), '```', '',

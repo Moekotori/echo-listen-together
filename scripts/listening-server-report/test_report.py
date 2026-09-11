@@ -63,6 +63,28 @@ class ReportTests(unittest.TestCase):
         self.assertIn('不是本时间窗口内的精确流量', text)
         self.assertIn('audio_stalled', text)
 
+    def test_quality_rejection_survives_timeline_truncation_and_close(self):
+        lines = [event('control_rejected', connection=1, role='host', reason='fixed_audio_quality')]*2
+        lines += [event('connection_summary', connection=1, ingress=0)]*305
+        lines += [event('connection_closed', connection=1, reason='connection_closed', closeCode=1006)]
+        data = summarize(lines)
+        self.assertEqual(data['rejectionReasons'], {'fixed_audio_quality': 2})
+        self.assertEqual(data['connections'][0]['rejectionReasons'], {'fixed_audio_quality': 2})
+        report = {'generatedAt': '2026-09-11', 'hours': 2, 'runtime': {}, 'collection': {}, 'gateway': {}, 'relay': data}
+        text = markdown(report)
+        self.assertIn('音质协议不兼容', text)
+        self.assertIn('bitrate=256000', text)
+        self.assertIn('fixed_audio_quality:2', text)
+        self.assertIn('不能仅凭此错误断定', text)
+
+    def test_unknown_rejection_is_sanitized_and_does_not_claim_quality_fault(self):
+        data = summarize([event('control_rejected', connection=1, reason='private token')])
+        self.assertEqual(data['rejectionReasons'], {'unknown': 1})
+        report = {'generatedAt': '2026-09-11', 'hours': 2, 'runtime': {}, 'collection': {}, 'gateway': {}, 'relay': data}
+        text = markdown(report)
+        self.assertNotIn('private token', text)
+        self.assertNotIn('音质协议不兼容', text)
+
     def test_retention_does_not_delete_unrelated_files(self):
         report = {'generatedAt': '2026-09-10', 'hours': 2, 'runtime': {}, 'collection': {}, 'gateway': {}, 'relay': summarize([])}
         with tempfile.TemporaryDirectory() as folder:

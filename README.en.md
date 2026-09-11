@@ -190,3 +190,5 @@ python3 scripts/listening-server-report/collect.py --hours 6
 Markdown and JSON reports are written to `misc/diagnostic-reports/`, retaining the latest ten pairs. They include container state, source hashes, per-connection counters and event timelines. Collection does not restart the service. Cumulative snapshots are not added together, and a submitted WebSocket send is not proof of audible client playback. See the [report tool documentation](scripts/listening-server-report/README.md).
 
 See the [fixed-256 rollout checks](docs/fixed-256-verification.md) for deployment and constrained-network validation.
+
+Detailed reports include rejection reasons, first/last fault times, recovery records, troubleshooting steps, evidence limits, and disk/container hashes for seven key source files. The JSON `diagnosis` uses the same findings as Markdown; see the [report runbook](scripts/listening-server-report/README.md).

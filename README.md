@@ -191,3 +191,5 @@ python3 scripts/listening-server-report/collect.py --hours 6
 Markdown 和 JSON 保存到 `misc/diagnostic-reports/`，保留最近 10 组，包含运行容器、源码哈希、分连接计数和事件时间线。生成报告不会重启服务；累计快照不会重复相加，提交转发也不等于用户已经听到。详见[报告工具说明](scripts/listening-server-report/README.md)。
 
 固定 256 kbps 的部署与弱网检查见[验证记录](docs/fixed-256-verification.md)。
+
+详细报告同时给出拒绝原因、故障首末时间、恢复记录、排查步骤和证据边界，并比较 7 个关键源码文件的磁盘／容器哈希。JSON 中的 `diagnosis` 与 Markdown 结论一致；详见[详细排错流程](scripts/listening-server-report/README.md#详细排错流程)。

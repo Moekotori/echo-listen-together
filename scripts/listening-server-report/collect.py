@@ -14,6 +14,10 @@ import threading
 import uuid
 
 from report import markdown, summarize, timestamp
+from troubleshooting import diagnose
+
+SOURCE_FILES = ('src/server.mjs', 'src/relay.mjs', 'src/diagnostics.mjs', 'src/rooms.mjs',
+                'src/room-features.mjs', 'src/programme-state.mjs', 'src/transport-policy.mjs')
 
 
 def command(args, root, limit=262144):
@@ -103,16 +107,18 @@ def collect(root, hours):
             else:
                 report['gateway'] = gateway_summary(raw)
             raw, stats_status = command(['docker', 'stats', '--no-stream', '--format', '{{json .}}', container], root)
+            report['runtime'][service]['statsStatus'] = stats_status
             if stats_status['exitCode'] == 0:
                 stats = json.loads(raw)
                 report['runtime'][service]['usage'] = {key: safe_quantity(stats.get(key)) for key in ('CPUPerc', 'MemUsage', 'NetIO', 'BlockIO', 'PIDs')}
             if service == 'relay':
-                hashes, hash_status = command(['docker', 'exec', container, 'sha256sum', 'src/server.mjs', 'src/relay.mjs', 'src/diagnostics.mjs'], root)
+                hashes, hash_status = command(['docker', 'exec', container, 'sha256sum', *SOURCE_FILES], root)
+                report['runtime'][service]['sourceHashStatus'] = hash_status
                 report['runtime'][service]['containerSourceSha256'] = {}
                 if hash_status['exitCode'] == 0:
                     for line in hashes.splitlines():
-                        match = re.fullmatch(r'([a-f0-9]{64})  (src/(?:server|relay|diagnostics)\.mjs)', line)
-                        if match:
+                        match = re.fullmatch(r'([a-f0-9]{64})  (src/[a-z-]+\.mjs)', line)
+                        if match and match[2] in SOURCE_FILES:
                             report['runtime'][service]['containerSourceSha256'][match[2]] = match[1]
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
             report['collection'].setdefault(service, {})['error'] = 'collection_failed'
@@ -121,7 +127,7 @@ def collect(root, hours):
     if hasattr(os, 'getloadavg'):
         report['runtime']['system']['loadAverage'] = os.getloadavg()
     report['runtime']['diskSourceSha256'] = {}
-    for name in ('src/server.mjs', 'src/relay.mjs', 'src/diagnostics.mjs'):
+    for name in SOURCE_FILES:
         try:
             with (root / name).open('rb') as source:
                 digest = hashlib.sha256()
@@ -130,6 +136,7 @@ def collect(root, hours):
                 report['runtime']['diskSourceSha256'][name] = digest.hexdigest()
         except OSError:
             report['runtime']['diskSourceSha256'][name] = None
+    report['diagnosis'] = diagnose(report)
     return report
 
 
