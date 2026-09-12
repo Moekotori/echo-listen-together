@@ -42,6 +42,21 @@ Binary audio uses ELTA v1: magic ELTA [0..3], version=1 [4], flags [5], LE heade
 Connection code: `echo-listen:` + base64url UTF-8 JSON `{server,roomId?,invitation?}`. It contains no admin token or room password. Treat invite codes as secrets; public discovery must never expose invitations. Steam Lobby metadata carries server/roomId only; password remains required for normal friend joining.
 
 Lobby invalidation: `{type:"rooms-changed"}` is a small additive push event for connected peers outside rooms. Public room create/join/leave/delete changes are coalesced over 400ms. Clients should debounce and fetch `rooms`, with at most one refresh in flight. No private room metadata or notifications about private-only changes are sent. Older clients may ignore this event and continue using manual refresh.
+
+## Connection and initialization cancellation
+
+A resumed connection replaces the previous socket. A pending `create` or `join`
+must still belong to that exact socket after password work completes; replacement
+or disconnection rejects the old request with `session_changed` without changing
+membership. The resumed peer can issue a fresh request normally.
+
+Clients must finish their initial `rooms` refresh before resetting the reconnect
+retry budget. If initialization fails after a restored room push, close the socket
+and invalidate membership, audio work, metadata and typing just as on an unexpected
+disconnect. Only a display-only room identity may remain while reconnecting.
+Guest device initialization must check cancellation after each asynchronous native
+operation; leaving, changing room or starting personal playback cancels remaining
+configuration and guest startup. These rules require no protocol version change.
 ## Fixed 256 kbps audio
 
 The ELTA packet format remains version 1. `hello.result.capabilities.fixedAudioBitrate` is `256000`; `audioQualities` is false. New clients require this capability before entering rooms.

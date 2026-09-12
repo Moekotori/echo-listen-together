@@ -16,6 +16,7 @@ export class Rooms {
     for (const member of room.members.values()) this.notify(member, { type: 'room', room: roomForPeer(message.room, room, member) });
   }
   async create(peer, input) {
+    const socket = peer.ws;
     if (peer.roomId) throw new Error('already_in_room');
     if (this.rooms.size + this.creating >= this.config.maxRooms) throw new Error('room_limit');
     const name = text(input.name, 64), password = text(input.password, 128, true);
@@ -24,13 +25,14 @@ export class Rooms {
     this.creating++;
     try {
       const passwordHash = await hashPassword(password);
-      if (!peer.ws || peer.roomId) throw new Error('session_changed');
+      if (!peer.ws || peer.ws !== socket || peer.roomId) throw new Error('session_changed');
       const room = { id: randomUUID(), name, maxUsers, private: input.private === true, password: passwordHash,
         hostId: peer.id, members: new Map([[peer.id, peer]]), invitations: new Map(), streamEpoch: 0, title: '', emptySince: null };
       this.rooms.set(room.id, room); peer.roomId = room.id; if (!room.private) this.changed(); this.broadcast(room); return roomForPeer(this.publicRoom(room, true), room, peer);
     } finally { this.creating--; }
   }
   async join(peer, input) {
+    const socket = peer.ws;
     if (peer.roomId) throw new Error('already_in_room');
     const room = this.rooms.get(text(input.roomId, 64));
     if (!room) throw new Error('room_not_found');
@@ -38,7 +40,7 @@ export class Rooms {
     const invited = invitation && invitation > Date.now();
     if (!invited && !await checkPassword(text(input.password, 128, true), room.password)) throw new Error('wrong_password');
     // Recheck all facts after the asynchronous password operation.
-    if (!peer.ws || peer.roomId || this.rooms.get(room.id) !== room) throw new Error('session_changed');
+    if (!peer.ws || peer.ws !== socket || peer.roomId || this.rooms.get(room.id) !== room) throw new Error('session_changed');
     if (room.members.size >= room.maxUsers) throw new Error('room_full');
     if (invited) room.invitations.delete(input.invitation);
     room.members.set(peer.id, peer); peer.roomId = room.id; room.emptySince = null;
