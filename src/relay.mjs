@@ -19,7 +19,7 @@ export function relayAudio(peer, data, rooms, diagnostics) {
     if (member.id === peer.id || !ws || ws.readyState !== 1) continue;
     // Brief congestion drops audio, not membership. Persistently blocked peers
     // still disconnect, and no extra queue retains stale audio.
-    if (!allowAudioSend(ws)) { diagnostics?.count(ws, 'congested'); continue; }
+    if (!allowAudioSend(ws, undefined, diagnostics)) { diagnostics?.count(ws, 'congested'); continue; }
     ws.send(data, { binary: true, compress: false });
     diagnostics?.count(ws, 'forwarded');
   }

@@ -1,11 +1,22 @@
 import { queuedControlBytes } from './socket-control-budget.mjs';
 // Fixed budgets only: no audio queue and no per-packet timers.
 const congestion = new WeakMap();
-export function allowAudioSend(ws, now = performance.now()) {
+const closing = new WeakSet();
+export function allowAudioSend(ws, now = performance.now(), diagnostics) {
+  if (closing.has(ws)) return false;
   if (ws.bufferedAmount <= 65536 && Math.max(0, ws.bufferedAmount - queuedControlBytes(ws)) <= 16384) { congestion.delete(ws); return true; }
   const since = congestion.get(ws) ?? now;
   congestion.set(ws, since);
-  if (now - since >= 10000) ws.close(1013, 'slow_receiver');
+  if (now - since >= 10000) {
+    closing.add(ws);
+    diagnostics?.reason(ws, 'slow_receiver');
+    // A close frame can be stuck behind the very backlog being discarded.
+    // Keep one bounded grace timer; do not leave silent CLOSING peers for 30s.
+    const timer = setTimeout(() => ws.terminate(), 1000);
+    timer.unref();
+    ws.once('close', () => clearTimeout(timer));
+    ws.close(1013, 'slow_receiver');
+  }
   return false;
 }
 

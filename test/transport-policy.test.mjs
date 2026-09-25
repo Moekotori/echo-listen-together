@@ -1,11 +1,12 @@
 import { test } from 'node:test';
+import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
 import { AudioRateBudget, allowAudioSend } from '../src/transport-policy.mjs';
 import { readConfig } from '../src/config.mjs';
 
 test('short receiver congestion drops audio without closing and recovers without a queue', () => {
   const closes = [];
-  const ws = { bufferedAmount: 20000, close: (...args) => closes.push(args) };
+  const ws = Object.assign(new EventEmitter(), { bufferedAmount: 20000, close: (...args) => { closes.push(args); ws.emit('close'); }, terminate() {} });
   for (let time = 0; time < 4000; time += 20) assert.equal(allowAudioSend(ws, time), false);
   assert.equal(closes.length, 0);
   ws.bufferedAmount = 0;
@@ -51,4 +52,30 @@ test('fixed 256 remains within the same bounded rate budget', () => {
   const ws = { close: () => assert.fail('fixed 256 audio must stay connected') };
   const budget = new AudioRateBudget(0);
   for (let time = 20; time <= 60000; time += 20) assert.equal(budget.accept(676, ws, time), true);
+});
+
+
+test('a blocked close handshake is terminated after one second and preserves the cause', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let closes = 0, terminated = 0, reason;
+  const ws = Object.assign(new EventEmitter(), { bufferedAmount: 20000,
+    close(code, value) { assert.equal(code, 1013); assert.equal(value, 'slow_receiver'); closes++; },
+    terminate() { terminated++; this.emit('close'); } });
+  const diagnostics = { reason(socket, value) { assert.equal(socket, ws); reason = value; } };
+  assert.equal(allowAudioSend(ws, 0, diagnostics), false);
+  assert.equal(allowAudioSend(ws, 10000, diagnostics), false);
+  assert.equal(allowAudioSend(ws, 10020, diagnostics), false);
+  assert.equal(closes, 1); assert.equal(reason, 'slow_receiver');
+  t.mock.timers.tick(999); assert.equal(terminated, 0);
+  t.mock.timers.tick(1); assert.equal(terminated, 1);
+  assert.equal(ws.listenerCount('close'), 0);
+});
+
+test('completed close releases its grace timer without terminating again', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const ws = Object.assign(new EventEmitter(), { bufferedAmount: 20000,
+    close() { this.emit('close'); }, terminate() { assert.fail('close already completed'); } });
+  allowAudioSend(ws, 0); allowAudioSend(ws, 10000);
+  t.mock.timers.tick(30000);
+  assert.equal(ws.listenerCount('close'), 0);
 });
